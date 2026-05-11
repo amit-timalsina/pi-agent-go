@@ -24,9 +24,9 @@ import (
 	"regexp"
 	"strings"
 
+	agent "github.com/amit-timalsina/pi-agent-go"
 	llm "github.com/amit-timalsina/pi-llm-go"
 	"github.com/amit-timalsina/pi-llm-go/providers/anthropic"
-	agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 // ShellArgs is the input schema for execute_shell.
@@ -54,7 +54,7 @@ func fakeShell(_ context.Context, in ShellArgs) (string, error) {
 // dangerousCommands lists patterns we refuse to execute outright.
 var dangerousCommands = []*regexp.Regexp{
 	regexp.MustCompile(`\brm\s+-rf\b`),
-	regexp.MustCompile(`:(){:|:&};:`),    // classic fork bomb
+	regexp.MustCompile(`:(){:|:&};:`),      // classic fork bomb
 	regexp.MustCompile(`\bdd\s+if=.+of=/`), // dd over a device
 	regexp.MustCompile(`\bmkfs\.`),
 }

@@ -14,7 +14,7 @@ If you want an agent harness that's small enough to read in one sitting, this is
 go get github.com/amit-timalsina/pi-agent-go
 ```
 
-Requires Go 1.23 or later (for `iter.Seq2`).
+Requires Go 1.24 or later (transitively, via `github.com/invopop/jsonschema` v0.14.0).
 
 ## Quickstart
 

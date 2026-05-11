@@ -7,16 +7,19 @@
 // boundary and finishes early.
 //
 // This shows:
+//
 //   - Agent.Steer is safe to call from another goroutine while Run() is
 //     iterating.
+//
 //   - The injected message lands in the transcript at the next LLM call
 //     boundary (not mid-call), so the model sees it as a fresh user
 //     instruction.
+//
 //   - The agent loop respects the injected guidance for the rest of the
 //     run.
 //
-//	export ANTHROPIC_API_KEY=...
-//	go run ./examples/steering
+//     export ANTHROPIC_API_KEY=...
+//     go run ./examples/steering
 package main
 
 import (
@@ -25,9 +28,9 @@ import (
 	"os"
 	"sync"
 
+	agent "github.com/amit-timalsina/pi-agent-go"
 	llm "github.com/amit-timalsina/pi-llm-go"
 	"github.com/amit-timalsina/pi-llm-go/providers/anthropic"
-	agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 type CountArgs struct {

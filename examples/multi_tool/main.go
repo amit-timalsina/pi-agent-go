@@ -1,15 +1,19 @@
 // multi_tool: agent with three typed tools chained across iterations.
 //
 // Shows:
+//
 //   - Registering multiple Typed[I, O] tools with different input / output
 //     types.
+//
 //   - The agent picking the right tool per sub-task automatically.
+//
 //   - Multi-iteration tool sequences (the agent calls -> sees result ->
 //     calls again).
+//
 //   - Snapshot() + ToolLog at the end to surface an audit trail.
 //
-//	export ANTHROPIC_API_KEY=...
-//	go run ./examples/multi_tool
+//     export ANTHROPIC_API_KEY=...
+//     go run ./examples/multi_tool
 package main
 
 import (
@@ -18,9 +22,9 @@ import (
 	"math"
 	"os"
 
+	agent "github.com/amit-timalsina/pi-agent-go"
 	llm "github.com/amit-timalsina/pi-llm-go"
 	"github.com/amit-timalsina/pi-llm-go/providers/anthropic"
-	agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 // --- Tool 1: currency conversion (with stub rates) ---
