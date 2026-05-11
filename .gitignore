@@ -1,0 +1,12 @@
+# Compiled binaries produced by `go build` inside the repo (e.g. when
+# running examples from the repo root). The Go toolchain emits these to
+# the working directory; they are not source.
+multi_tool
+steering
+with_hooks
+hello_agent
+
+# Coverage / profiling output.
+coverage.out
+*.prof
+*.test
