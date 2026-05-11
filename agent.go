@@ -86,17 +86,6 @@ type Config struct {
 	// length, applied to any AgentTool that doesn't set its own
 	// MaxSummarySize. 0 falls back to DefaultMaxSummarySize (32 KiB).
 	DefaultMaxSummarySize int
-
-	// EnableFetchToolResult registers the built-in fetch_tool_result
-	// meta-tool. The model calls it with {call_index, field_path?} to
-	// retrieve the full payload of a prior tool call by index. Requires
-	// PayloadResolver to be set; otherwise New returns an error.
-	EnableFetchToolResult bool
-
-	// PayloadResolver is the storage backend that resolves PayloadRef
-	// values to full payload bodies. Required when EnableFetchToolResult
-	// is true; ignored otherwise.
-	PayloadResolver PayloadResolver
 }
 
 // Agent owns the single-loop conversation state. See package doc.
@@ -127,12 +116,9 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.MaxIterations <= 0 {
 		cfg.MaxIterations = defaultMaxIterations
 	}
-	if cfg.EnableFetchToolResult && cfg.PayloadResolver == nil {
-		return nil, errors.New("agent: Config.EnableFetchToolResult requires Config.PayloadResolver")
-	}
 	a := &Agent{
 		cfg:      cfg,
-		tools:    make(map[string]AgentTool, len(cfg.Tools)+1),
+		tools:    make(map[string]AgentTool, len(cfg.Tools)),
 		steering: make(chan llm.Message, steeringBufferSize),
 	}
 	for _, t := range cfg.Tools {
@@ -142,19 +128,7 @@ func New(cfg Config) (*Agent, error) {
 		if t.Handler == nil {
 			return nil, fmt.Errorf("agent: tool %q has nil Handler", t.Name)
 		}
-		if cfg.EnableFetchToolResult && t.Name == fetchToolResultName {
-			return nil, fmt.Errorf("agent: tool name %q is reserved when EnableFetchToolResult is set", t.Name)
-		}
 		a.tools[t.Name] = t
-	}
-	if cfg.EnableFetchToolResult {
-		fetch := newFetchToolResultTool(a)
-		a.tools[fetch.Name] = fetch
-		// Mirror into a.cfg.Tools so buildRequest's tools-slice iteration
-		// surfaces the meta-tool to the LLM. Append AT THE END (after
-		// the caller's tools) so callers can reason about tool ordering
-		// without surprise.
-		a.cfg.Tools = append(a.cfg.Tools, fetch)
 	}
 	return a, nil
 }
@@ -476,9 +450,9 @@ func (a *Agent) executeToolCalls(
 		effective := result.effectiveSummary()
 		if len(effective) > maxSize {
 			result = Result{
-				Summary: fmt.Sprintf("tool %q returned a summary of %d bytes; max is %d. Bug in the tool's summary budgeting; use FullPayloadRef for large outputs.",
+				Summary: fmt.Sprintf("tool %q returned a summary of %d bytes; max is %d. Bug in the tool's summary budgeting; surface large outputs via FullPayloadHint instead.",
 					info.Name, len(effective), maxSize),
-				FullPayloadRef: result.FullPayloadRef,
+				FullPayloadHint: result.FullPayloadHint,
 			}
 			isError = true
 			effective = result.Summary
@@ -488,15 +462,15 @@ func (a *Agent) executeToolCalls(
 
 		a.mu.Lock()
 		a.toolLog = append(a.toolLog, ToolLogEntry{
-			Iteration:      iteration,
-			ToolCallID:     call.ID,
-			Name:           call.Name,
-			Arguments:      call.Arguments,
-			Result:         effective,
-			FullPayloadRef: result.FullPayloadRef,
-			IsError:        isError,
-			StartedAt:      startedAt,
-			EndedAt:        endedAt,
+			Iteration:       iteration,
+			ToolCallID:      call.ID,
+			Name:            call.Name,
+			Arguments:       call.Arguments,
+			Result:          effective,
+			FullPayloadHint: result.FullPayloadHint,
+			IsError:         isError,
+			StartedAt:       startedAt,
+			EndedAt:         endedAt,
 		})
 		a.mu.Unlock()
 
@@ -507,11 +481,11 @@ func (a *Agent) executeToolCalls(
 		})
 
 		if !yield(EventToolEnd{
-			ToolCallID:     call.ID,
-			Name:           call.Name,
-			Result:         effective,
-			IsError:        isError,
-			FullPayloadRef: result.FullPayloadRef,
+			ToolCallID:      call.ID,
+			Name:            call.Name,
+			Result:          effective,
+			IsError:         isError,
+			FullPayloadHint: result.FullPayloadHint,
 		}, nil) {
 			return nil, false
 		}

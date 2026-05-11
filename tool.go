@@ -21,34 +21,39 @@ import (
 const DefaultMaxSummarySize = 32 * 1024
 
 // Result is what a tool handler returns. Summary is the text the model
-// sees as the tool's response; FullPayloadRef, when non-nil, points to
-// durable storage holding the full output for retrieval via the built-in
-// fetch_tool_result meta-tool (see Config.EnableFetchToolResult).
+// sees as the tool's response; FullPayloadHint, when non-empty, is an
+// opaque pointer (file path, URL, storage key) the tool can surface for
+// observability and for the model to retrieve via a separately-registered
+// retrieval tool (e.g. a read_file or http_get tool the caller wires up).
 //
 // Summary must satisfy len(Summary) <= the tool's effective
 // MaxSummarySize at execution time. The agent loop enforces this and
 // returns a clear error if exceeded — caller's bug, surfaced loudly.
 //
-// Trivially-small tool outputs leave FullPayloadRef nil; Summary IS the
-// full output. Large structured outputs (correlation matrices, frame
-// analyses, multi-trajectory data) set FullPayloadRef and put a bounded
-// summary in Summary.
+// Trivially-small tool outputs leave FullPayloadHint empty; Summary IS the
+// full output. Large structured outputs write the full payload somewhere
+// retrievable (tempfile, S3, durable store) and set FullPayloadHint to
+// the locator, with a bounded summary in Summary. Mario's pi-mono uses
+// this pattern with `/tmp/bash-<id>.log` paths retrieved via the existing
+// Read tool — no framework abstraction needed.
 type Result struct {
 	// Summary is the bounded text fed back to the model as the tool's
 	// response. Must be <= the tool's effective MaxSummarySize.
 	Summary string
 
-	// FullPayloadRef, when non-nil, points to durable storage holding the
-	// full tool output. NOT injected into model context. Retrievable via
-	// the built-in fetch_tool_result meta-tool when the agent has
-	// Config.EnableFetchToolResult + Config.PayloadResolver set.
-	FullPayloadRef *PayloadRef
+	// FullPayloadHint, when non-empty, is an opaque caller-defined string
+	// surfacing where the tool's full output lives (a tempfile path, S3
+	// URL, Postgres row id, etc.). The agent does NOT interpret it; it
+	// just surfaces the value on EventToolEnd.FullPayloadHint and
+	// ToolLogEntry.FullPayloadHint. The model retrieves the content via
+	// whatever existing tool the caller registered for that purpose.
+	FullPayloadHint string
 
 	// Content is the deprecated v0.1.x alias for Summary. When set and
 	// Summary is empty, the agent loop uses Content. When both are set,
 	// Summary wins.
 	//
-	// Deprecated: use Summary instead. Removed in v0.3.0; the migration
+	// Deprecated: use Summary instead. Removed in v0.4.0; the migration
 	// is a single sed: `s/Result{Content:/Result{Summary:/g`.
 	Content string
 }
@@ -60,70 +65,6 @@ func (r Result) effectiveSummary() string {
 		return r.Summary
 	}
 	return r.Content
-}
-
-// PayloadRef points at durably-stored full tool output. Caller-supplied
-// values flow opaquely through the agent loop to the PayloadResolver,
-// which interprets them.
-type PayloadRef struct {
-	// Backend is a free-form string the PayloadResolver dispatches on
-	// (e.g. "postgres", "minio", "filesystem", "memory"). pi-agent-go
-	// does not interpret it.
-	Backend string
-
-	// Key is the backend-specific lookup key (a Postgres row id, a MinIO
-	// object key, a filesystem path, etc.).
-	Key string
-
-	// Size is the best-effort byte size of the full payload. 0 means
-	// unknown — some backends can't cheaply compute size without a HEAD.
-	Size int64
-
-	// MimeType describes the payload's content type. Used by review UIs
-	// and by Resolver implementations that vary their behavior by type
-	// (e.g. JSON gets field_path slicing; binary gets returned whole).
-	MimeType string
-}
-
-// PayloadResolver fetches the full payload (or a sub-tree of it) from
-// durable storage when the model invokes the fetch_tool_result meta-tool.
-// Backends are caller-owned — pi-agent-go is storage-agnostic.
-//
-// fieldPath is passed verbatim to the Resolver; pi-agent-go does NOT
-// parse it. The Resolver decides the dialect (JSONPath, JMESPath,
-// dotted, ignored entirely). Document the per-consumer format
-// expectation in the Resolver's docs.
-//
-// On error (payload not found, TTL expired, network failure), return a
-// non-nil error. The agent loop surfaces it via the standard tool-error
-// path: ToolResultBlock{IsError: true, Content: err.Error()}. The model
-// sees the failure and adapts.
-type PayloadResolver interface {
-	Resolve(ctx context.Context, ref PayloadRef, fieldPath string) (string, error)
-}
-
-// MemoryPayloadResolver is an in-memory PayloadResolver suitable for
-// tests and trivial demos. Maps {Backend: "memory" (or empty), Key: "..."}
-// to a stored string. Not concurrency-safe; protect externally if shared.
-type MemoryPayloadResolver struct {
-	Payloads map[string]string // keyed by PayloadRef.Key
-}
-
-// Resolve returns the stored payload for the given key. fieldPath is
-// IGNORED in this implementation — extend with your own logic if you
-// want path slicing.
-func (m *MemoryPayloadResolver) Resolve(_ context.Context, ref PayloadRef, _ string) (string, error) {
-	if m.Payloads == nil {
-		return "", fmt.Errorf("memory resolver: no payloads stored")
-	}
-	if ref.Backend != "" && ref.Backend != "memory" {
-		return "", fmt.Errorf("memory resolver: cannot resolve backend %q", ref.Backend)
-	}
-	v, ok := m.Payloads[ref.Key]
-	if !ok {
-		return "", fmt.Errorf("memory resolver: key %q not found", ref.Key)
-	}
-	return v, nil
 }
 
 // AgentTool is a tool with an executable handler. Embeds llm.Tool so the

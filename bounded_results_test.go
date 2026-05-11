@@ -3,7 +3,6 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -141,21 +140,21 @@ func TestBudgetUsesDefaultMaxSummarySizeWhenPerToolZero(t *testing.T) {
 	}
 }
 
-// --- FullPayloadRef carried through ToolLogEntry + EventToolEnd ---
+// --- FullPayloadHint carried through ToolLogEntry + EventToolEnd ---
 
-func TestFullPayloadRefCarriedThroughEvents(t *testing.T) {
-	ref := &agent.PayloadRef{Backend: "memory", Key: "k1", Size: 12345, MimeType: "application/json"}
+func TestFullPayloadHintCarriedThroughEvents(t *testing.T) {
+	const hint = "/tmp/full-payload-xyz.json"
 	tool := agent.Raw(
-		"refs",
-		"returns a payload ref",
+		"hints",
+		"returns a payload hint",
 		json.RawMessage(`{"type":"object"}`),
 		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
-			return agent.Result{Summary: "short summary", FullPayloadRef: ref}, nil
+			return agent.Result{Summary: "short summary", FullPayloadHint: hint}, nil
 		},
 	)
 	fake := &fakeLLM{
 		scripts: [][]llm.StreamEvent{
-			toolCallScript("call_1", "refs", `{}`),
+			toolCallScript("call_1", "hints", `{}`),
 			textOnlyScript("ack"),
 		},
 	}
@@ -168,125 +167,42 @@ func TestFullPayloadRefCarriedThroughEvents(t *testing.T) {
 			end = e
 		}
 	}
-	if end.FullPayloadRef == nil || end.FullPayloadRef.Key != "k1" {
-		t.Errorf("EventToolEnd.FullPayloadRef not carried: %+v", end.FullPayloadRef)
+	if end.FullPayloadHint != hint {
+		t.Errorf("EventToolEnd.FullPayloadHint=%q, want %q", end.FullPayloadHint, hint)
 	}
 
 	snap := a.Snapshot()
-	if len(snap.ToolLog) == 0 || snap.ToolLog[0].FullPayloadRef == nil ||
-		snap.ToolLog[0].FullPayloadRef.Size != 12345 {
-		t.Errorf("ToolLogEntry.FullPayloadRef not carried: %+v", snap.ToolLog)
+	if len(snap.ToolLog) == 0 || snap.ToolLog[0].FullPayloadHint != hint {
+		t.Errorf("ToolLogEntry.FullPayloadHint not carried: %+v", snap.ToolLog)
 	}
 }
 
-// --- EnableFetchToolResult validation ---
-
-func TestNewRejectsEnableFetchWithoutResolver(t *testing.T) {
-	_, err := agent.New(agent.Config{
-		LLM:                   &fakeLLM{},
-		Model:                 "test",
-		EnableFetchToolResult: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "PayloadResolver") {
-		t.Errorf("want PayloadResolver-required error; got %v", err)
-	}
-}
-
-func TestNewRejectsReservedToolName(t *testing.T) {
-	collidingTool := agent.Raw(
-		"fetch_tool_result", // reserved when EnableFetchToolResult is on
-		"squat",
-		json.RawMessage(`{"type":"object"}`),
-		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
-			return agent.Result{Summary: ""}, nil
-		},
-	)
-	_, err := agent.New(agent.Config{
-		LLM:                   &fakeLLM{},
-		Model:                 "test",
-		Tools:                 []agent.AgentTool{collidingTool},
-		EnableFetchToolResult: true,
-		PayloadResolver:       &agent.MemoryPayloadResolver{Payloads: map[string]string{}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Errorf("want reserved-name error; got %v", err)
-	}
-}
-
-// --- fetch_tool_result end-to-end ---
-
-func TestFetchToolResultResolvesPriorPayload(t *testing.T) {
-	// Iter 1: caller's tool emits Summary + FullPayloadRef.
-	// Iter 2: model calls fetch_tool_result with call_index=1.
-	// Iter 3: model produces final answer.
-	resolver := &agent.MemoryPayloadResolver{
-		Payloads: map[string]string{"k1": "the full payload body"},
-	}
-	bigTool := agent.Raw(
-		"big",
-		"returns ref",
+func TestBudgetViolationPreservesFullPayloadHint(t *testing.T) {
+	// When the loop rewrites Result to surface a budget-violation error,
+	// the FullPayloadHint should survive — observability consumers still
+	// want to see where the (rejected) full payload lives.
+	const hint = "/tmp/oversize.bin"
+	tool := agent.Raw(
+		"oversize",
+		"summary too big",
 		json.RawMessage(`{"type":"object"}`),
 		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
 			return agent.Result{
-				Summary:        "summary; ref available",
-				FullPayloadRef: &agent.PayloadRef{Backend: "memory", Key: "k1"},
+				Summary:         strings.Repeat("x", 200),
+				FullPayloadHint: hint,
 			}, nil
 		},
 	)
+	tool.MaxSummarySize = 50
 	fake := &fakeLLM{
 		scripts: [][]llm.StreamEvent{
-			toolCallScript("call_1", "big", `{}`),
-			toolCallScript("call_2", "fetch_tool_result", `{"call_index":1}`),
-			textOnlyScript("final"),
-		},
-	}
-	a, _ := agent.New(agent.Config{
-		LLM:                   fake,
-		Model:                 "test",
-		Tools:                 []agent.AgentTool{bigTool},
-		EnableFetchToolResult: true,
-		PayloadResolver:       resolver,
-	})
-	events, err := collect(t, a.Run(context.Background(), "go"))
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	// The second EventToolEnd is the fetch result.
-	var ends []agent.EventToolEnd
-	for _, ev := range events {
-		if e, ok := ev.(agent.EventToolEnd); ok {
-			ends = append(ends, e)
-		}
-	}
-	if len(ends) != 2 {
-		t.Fatalf("got %d EventToolEnd, want 2", len(ends))
-	}
-	if ends[1].Name != "fetch_tool_result" {
-		t.Errorf("second tool call should be fetch_tool_result; got %q", ends[1].Name)
-	}
-	if ends[1].IsError {
-		t.Errorf("fetch result was an error: %q", ends[1].Result)
-	}
-	if ends[1].Result != "the full payload body" {
-		t.Errorf("fetch returned %q, want %q", ends[1].Result, "the full payload body")
-	}
-}
-
-func TestFetchToolResultOutOfRange(t *testing.T) {
-	resolver := &agent.MemoryPayloadResolver{Payloads: map[string]string{}}
-	fake := &fakeLLM{
-		scripts: [][]llm.StreamEvent{
-			toolCallScript("call_1", "fetch_tool_result", `{"call_index":99}`),
+			toolCallScript("call_1", "oversize", `{}`),
 			textOnlyScript("ack"),
 		},
 	}
-	a, _ := agent.New(agent.Config{
-		LLM:                   fake,
-		Model:                 "test",
-		EnableFetchToolResult: true,
-		PayloadResolver:       resolver,
-	})
+	a, _ := agent.New(agent.Config{LLM: fake, Model: "test", Tools: []agent.AgentTool{tool}})
 	events, _ := collect(t, a.Run(context.Background(), "go"))
+
 	var end agent.EventToolEnd
 	for _, ev := range events {
 		if e, ok := ev.(agent.EventToolEnd); ok {
@@ -294,75 +210,9 @@ func TestFetchToolResultOutOfRange(t *testing.T) {
 		}
 	}
 	if !end.IsError {
-		t.Errorf("out-of-range fetch should be IsError; got %+v", end)
+		t.Fatal("expected budget violation marked as error")
 	}
-	if !strings.Contains(end.Result, "out of range") {
-		t.Errorf("error message should mention out-of-range; got %q", end.Result)
-	}
-}
-
-func TestFetchToolResultResolverErrorSurfaces(t *testing.T) {
-	resolver := &agent.MemoryPayloadResolver{Payloads: map[string]string{}} // empty -> miss
-	bigTool := agent.Raw(
-		"big",
-		"returns ref to a key the resolver won't find",
-		json.RawMessage(`{"type":"object"}`),
-		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
-			return agent.Result{
-				Summary:        "s",
-				FullPayloadRef: &agent.PayloadRef{Backend: "memory", Key: "missing"},
-			}, nil
-		},
-	)
-	fake := &fakeLLM{
-		scripts: [][]llm.StreamEvent{
-			toolCallScript("call_1", "big", `{}`),
-			toolCallScript("call_2", "fetch_tool_result", `{"call_index":1}`),
-			textOnlyScript("ack"),
-		},
-	}
-	a, _ := agent.New(agent.Config{
-		LLM:                   fake,
-		Model:                 "test",
-		Tools:                 []agent.AgentTool{bigTool},
-		EnableFetchToolResult: true,
-		PayloadResolver:       resolver,
-	})
-	events, _ := collect(t, a.Run(context.Background(), "go"))
-	var ends []agent.EventToolEnd
-	for _, ev := range events {
-		if e, ok := ev.(agent.EventToolEnd); ok {
-			ends = append(ends, e)
-		}
-	}
-	if len(ends) < 2 || !ends[1].IsError {
-		t.Fatalf("expected fetch error result; got %+v", ends)
-	}
-	if !strings.Contains(ends[1].Result, "missing") {
-		t.Errorf("expected resolver error in result; got %q", ends[1].Result)
-	}
-}
-
-// --- MemoryPayloadResolver direct unit tests ---
-
-func TestMemoryPayloadResolverHitMissWrongBackend(t *testing.T) {
-	r := &agent.MemoryPayloadResolver{
-		Payloads: map[string]string{"k1": "v1"},
-	}
-
-	if got, err := r.Resolve(context.Background(), agent.PayloadRef{Backend: "memory", Key: "k1"}, ""); err != nil || got != "v1" {
-		t.Errorf("hit: got=%q err=%v", got, err)
-	}
-	if _, err := r.Resolve(context.Background(), agent.PayloadRef{Backend: "memory", Key: "missing"}, ""); err == nil {
-		t.Error("miss: expected error")
-	}
-	if _, err := r.Resolve(context.Background(), agent.PayloadRef{Backend: "s3", Key: "k1"}, ""); err == nil ||
-		!errors.Is(err, err) /* trivially true; just want non-nil */ {
-		t.Error("wrong-backend: expected error")
-	}
-
-	empty := &agent.MemoryPayloadResolver{}
-	if _, err := empty.Resolve(context.Background(), agent.PayloadRef{Key: "k1"}, ""); err == nil {
-		t.Error("nil-payloads: expected error")
+	if end.FullPayloadHint != hint {
+		t.Errorf("FullPayloadHint lost after budget rewrite: got %q, want %q", end.FullPayloadHint, hint)
 	}
 }
