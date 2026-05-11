@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	llm "github.com/amit-timalsina/pi-llm-go"
 	agent "github.com/amit-timalsina/pi-agent-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
 )
 
 // --- Content alias backward-compat ---

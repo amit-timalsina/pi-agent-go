@@ -106,4 +106,3 @@ func newFetchToolResultTool(a *Agent) AgentTool {
 		MaxSummarySize: 256 * 1024,
 	}
 }
-

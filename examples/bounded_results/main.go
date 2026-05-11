@@ -14,11 +14,13 @@
 // payload via the registered MemoryPayloadResolver.
 //
 // Two prompts demonstrate the pattern:
-//   1. "What are the top correlations?" — summary suffices.
-//   2. "What's the correlation between vars 7 and 23?" — requires full payload.
 //
-//	export ANTHROPIC_API_KEY=...
-//	go run ./examples/bounded_results
+//  1. "What are the top correlations?" — summary suffices.
+//
+//  2. "What's the correlation between vars 7 and 23?" — requires full payload.
+//
+//     export ANTHROPIC_API_KEY=...
+//     go run ./examples/bounded_results
 package main
 
 import (
@@ -30,9 +32,9 @@ import (
 	"sort"
 	"strings"
 
+	agent "github.com/amit-timalsina/pi-agent-go"
 	llm "github.com/amit-timalsina/pi-llm-go"
 	"github.com/amit-timalsina/pi-llm-go/providers/anthropic"
-	agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 const numVars = 50
