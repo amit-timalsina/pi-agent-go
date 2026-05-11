@@ -107,8 +107,6 @@ func main() {
 	}
 }
 
-type corrArgs struct{} // no arguments
-
 type corrEntry struct {
 	A, B int
 	V    float64

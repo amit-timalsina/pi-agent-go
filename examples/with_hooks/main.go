@@ -115,10 +115,10 @@ func main() {
 			if isErr {
 				return nil, nil
 			}
-			redacted := secretPattern.ReplaceAllString(r.Content, "$1=[REDACTED]")
-			if redacted != r.Content {
+			redacted := secretPattern.ReplaceAllString(r.Summary, "$1=[REDACTED]")
+			if redacted != r.Summary {
 				fmt.Fprintln(os.Stderr, "[after-hook] redacted secret pattern from output")
-				return &agent.Result{Content: redacted}, nil
+				return &agent.Result{Summary: redacted}, nil
 			}
 			return nil, nil
 		},
