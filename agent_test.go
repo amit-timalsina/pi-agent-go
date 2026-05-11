@@ -453,7 +453,7 @@ func TestResetPanicsIfRunning(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		seq := a.Run(ctx, "go")
-		for ev, _ := range seq {
+		for ev := range seq {
 			if _, ok := ev.(agent.EventRunStart); ok {
 				close(started)
 			}
@@ -488,7 +488,7 @@ func TestAlreadyRunning(t *testing.T) {
 	started := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		for ev, _ := range a.Run(ctx, "first") {
+		for ev := range a.Run(ctx, "first") {
 			if _, ok := ev.(agent.EventRunStart); ok {
 				close(started)
 			}
