@@ -1,5 +1,10 @@
 # pi-agent-go
 
+[![CI](https://github.com/amit-timalsina/pi-agent-go/actions/workflows/ci.yml/badge.svg)](https://github.com/amit-timalsina/pi-agent-go/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/amit-timalsina/pi-agent-go.svg)](https://pkg.go.dev/github.com/amit-timalsina/pi-agent-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/amit-timalsina/pi-agent-go)](https://goreportcard.com/report/github.com/amit-timalsina/pi-agent-go)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A minimal single-loop agent on top of [`pi-llm-go`](https://github.com/amit-timalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Tool registry with typed handlers, three hooks (`BeforeToolCall` / `AfterToolCall` / `OnSteering`), and a buffered steering channel for mid-run injection.
 
 > Status: **v0.x — pre-1.0**. API may change between minor versions; see [CHANGELOG.md](CHANGELOG.md).
