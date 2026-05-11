@@ -194,7 +194,7 @@ func (a *Agent) RunMessage(ctx context.Context, userMsg llm.Message) iter.Seq2[A
 			}
 
 			// Execute tool calls (sequential at v1), apply hooks, bundle results.
-			toolResults, cont := a.executeToolCalls(ctx, iteration, assistantMsg, toolCalls, yield)
+			toolResults, cont := a.executeToolCalls(ctx, iteration, toolCalls, yield)
 			if !cont {
 				return
 			}
@@ -362,7 +362,6 @@ func (a *Agent) runIteration(
 func (a *Agent) executeToolCalls(
 	ctx context.Context,
 	iteration int,
-	assistantMsg llm.Message,
 	calls []llm.ToolCallBlock,
 	yield func(AgentEvent, error) bool,
 ) ([]llm.Block, bool) {
