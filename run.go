@@ -35,8 +35,14 @@ type ToolLogEntry struct {
 	ToolCallID string
 	Name       string
 	Arguments  json.RawMessage
-	Result     string
-	IsError    bool
-	StartedAt  time.Time
-	EndedAt    time.Time
+	// Result is the bounded Summary fed back to the model — same value
+	// surfaced on EventToolEnd.Result.
+	Result string
+	// FullPayloadRef, when non-nil, points at durable storage holding the
+	// full tool output. Used by the built-in fetch_tool_result meta-tool
+	// to locate prior payloads by call-index.
+	FullPayloadRef *PayloadRef
+	IsError        bool
+	StartedAt      time.Time
+	EndedAt        time.Time
 }

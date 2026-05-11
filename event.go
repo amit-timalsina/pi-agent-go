@@ -66,12 +66,15 @@ type EventToolStart struct {
 }
 
 // EventToolEnd is emitted after a tool finishes executing and any
-// AfterToolCall hook has been applied.
+// AfterToolCall hook has been applied. FullPayloadRef, when non-nil,
+// points at durable storage holding the full tool output — useful for
+// review UIs that want to offer "view full output" affordances.
 type EventToolEnd struct {
-	ToolCallID string
-	Name       string
-	Result     string
-	IsError    bool
+	ToolCallID     string
+	Name           string
+	Result         string
+	IsError        bool
+	FullPayloadRef *PayloadRef
 }
 
 // EventRunEnd is the terminal event for a Run. FinalMessage is the last
