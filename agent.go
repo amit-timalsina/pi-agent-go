@@ -57,6 +57,10 @@ var (
 	// ErrSteeringClosed: Steer was called after the agent was reset or the
 	// steering channel was closed.
 	ErrSteeringClosed = errors.New("agent: steering channel closed")
+	// ErrTransformContext: Config.TransformContext returned an error.
+	// The underlying error is wrapped; use errors.Unwrap or errors.As to
+	// inspect.
+	ErrTransformContext = errors.New("agent: TransformContext failed")
 )
 
 // Config configures a new Agent.
@@ -65,7 +69,9 @@ type Config struct {
 	LLM llm.LLM
 	// Model is the provider's model id. Required.
 	Model string
-	// SystemPrompt is forwarded as llm.Request.System on every iteration.
+	// SystemPrompt is the initial system prompt. Forwarded as
+	// llm.Request.System on every iteration unless overridden by
+	// Agent.SetSystemPrompt at runtime.
 	SystemPrompt string
 	// Tools available to the model. Duplicates by Name are rejected at New.
 	Tools []AgentTool
@@ -86,6 +92,25 @@ type Config struct {
 	// length, applied to any AgentTool that doesn't set its own
 	// MaxSummarySize. 0 falls back to DefaultMaxSummarySize (32 KiB).
 	DefaultMaxSummarySize int
+
+	// TransformContext, when non-nil, is called at the top of every
+	// iteration with a copy of the current transcript just before the LLM
+	// call. The returned slice is used in place of the original. Use this
+	// for context-window management (pruning, summarization) and for
+	// late-injecting context that should not be persisted in the durable
+	// transcript.
+	//
+	// Contract: must return a non-nil slice. Returning an error aborts
+	// the run and propagates as ErrTransformContext-wrapped. Returning
+	// the input unchanged is the no-op fallback.
+	//
+	// The transcript stored on the Agent is not mutated by this hook;
+	// only the slice fed into llm.Request is. Snapshot() continues to
+	// return the original transcript.
+	//
+	// Mirrors Mario Zechner's pi-mono `transformContext` (see
+	// packages/agent/src/types.ts).
+	TransformContext func(ctx context.Context, messages []llm.Message) ([]llm.Message, error)
 }
 
 // Agent owns the single-loop conversation state. See package doc.
@@ -93,13 +118,18 @@ type Agent struct {
 	cfg   Config
 	tools map[string]AgentTool
 
-	mu        sync.RWMutex
-	messages  []llm.Message
-	toolLog   []ToolLogEntry
-	lastUsage llm.Usage
-	runID     string
-	iteration int
-	running   bool
+	mu sync.RWMutex
+	// systemPrompt is the live system prompt. Initialized from
+	// cfg.SystemPrompt at New(); mutated via SetSystemPrompt; consumed
+	// at every buildRequest() call. Guarded by mu so a goroutine calling
+	// SetSystemPrompt cannot race with the loop reading it.
+	systemPrompt string
+	messages     []llm.Message
+	toolLog      []ToolLogEntry
+	lastUsage    llm.Usage
+	runID        string
+	iteration    int
+	running      bool
 
 	steering chan llm.Message
 }
@@ -117,9 +147,10 @@ func New(cfg Config) (*Agent, error) {
 		cfg.MaxIterations = defaultMaxIterations
 	}
 	a := &Agent{
-		cfg:      cfg,
-		tools:    make(map[string]AgentTool, len(cfg.Tools)),
-		steering: make(chan llm.Message, steeringBufferSize),
+		cfg:          cfg,
+		systemPrompt: cfg.SystemPrompt,
+		tools:        make(map[string]AgentTool, len(cfg.Tools)),
+		steering:     make(chan llm.Message, steeringBufferSize),
 	}
 	for _, t := range cfg.Tools {
 		if _, dup := a.tools[t.Name]; dup {
@@ -184,7 +215,11 @@ func (a *Agent) RunMessage(ctx context.Context, userMsg llm.Message) iter.Seq2[A
 			}
 
 			// One LLM call per iteration.
-			req := a.buildRequest()
+			req, err := a.buildRequest(ctx)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
 			assistantMsg, ok := a.runIteration(ctx, iteration, req, yield)
 			if !ok {
 				return
@@ -228,6 +263,29 @@ func (a *Agent) Steer(ctx context.Context, msg llm.Message) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// SetSystemPrompt replaces the system prompt used on subsequent iterations.
+// The new prompt takes effect at the next buildRequest() call, which
+// happens at the top of every iteration after steering drains. Safe to
+// call from any goroutine while Run is in progress; the active LLM call
+// completes against the prior prompt.
+//
+// Pair with Steer to inject a user message at the same iteration
+// boundary when the prompt change needs an accompanying nudge to the
+// model.
+func (a *Agent) SetSystemPrompt(prompt string) {
+	a.mu.Lock()
+	a.systemPrompt = prompt
+	a.mu.Unlock()
+}
+
+// SystemPrompt returns the live system prompt. Returns the current value
+// even if SetSystemPrompt was called by another goroutine.
+func (a *Agent) SystemPrompt() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.systemPrompt
 }
 
 // Snapshot returns an immutable point-in-time view of the agent's state.
@@ -493,25 +551,41 @@ func (a *Agent) executeToolCalls(
 	return results, true
 }
 
-// buildRequest snapshots the current transcript into a llm.Request.
-func (a *Agent) buildRequest() llm.Request {
+// buildRequest snapshots the current transcript into a llm.Request,
+// applying Config.TransformContext (if set) at the message-slice
+// boundary. The transcript stored on the Agent is not mutated by the
+// transform; only the request fed into the LLM is.
+func (a *Agent) buildRequest(ctx context.Context) (llm.Request, error) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	tools := make([]llm.Tool, 0, len(a.tools))
+	tools := make([]llm.Tool, 0, len(a.cfg.Tools))
 	for _, t := range a.cfg.Tools {
 		tools = append(tools, t.Tool)
 	}
 	msgs := make([]llm.Message, len(a.messages))
 	copy(msgs, a.messages)
+	system := a.systemPrompt
+	a.mu.RUnlock()
+
+	if a.cfg.TransformContext != nil {
+		transformed, err := a.cfg.TransformContext(ctx, msgs)
+		if err != nil {
+			return llm.Request{}, fmt.Errorf("%w: %w", ErrTransformContext, err)
+		}
+		if transformed == nil {
+			return llm.Request{}, fmt.Errorf("%w: returned nil slice", ErrTransformContext)
+		}
+		msgs = transformed
+	}
+
 	return llm.Request{
 		Model:       a.cfg.Model,
-		System:      a.cfg.SystemPrompt,
+		System:      system,
 		Messages:    msgs,
 		Tools:       tools,
 		Temperature: a.cfg.Temperature,
 		MaxTokens:   a.cfg.MaxTokens,
 		Thinking:    a.cfg.Thinking,
-	}
+	}, nil
 }
 
 // runContextLocked builds a RunContext snapshot for the current run.
