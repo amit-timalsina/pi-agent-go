@@ -81,6 +81,22 @@ type Config struct {
 	BeforeToolCall BeforeToolCallHook
 	AfterToolCall  AfterToolCallHook
 	OnSteering     OnSteeringHook
+
+	// DefaultMaxSummarySize is the per-agent default for Result.Summary
+	// length, applied to any AgentTool that doesn't set its own
+	// MaxSummarySize. 0 falls back to DefaultMaxSummarySize (32 KiB).
+	DefaultMaxSummarySize int
+
+	// EnableFetchToolResult registers the built-in fetch_tool_result
+	// meta-tool. The model calls it with {call_index, field_path?} to
+	// retrieve the full payload of a prior tool call by index. Requires
+	// PayloadResolver to be set; otherwise New returns an error.
+	EnableFetchToolResult bool
+
+	// PayloadResolver is the storage backend that resolves PayloadRef
+	// values to full payload bodies. Required when EnableFetchToolResult
+	// is true; ignored otherwise.
+	PayloadResolver PayloadResolver
 }
 
 // Agent owns the single-loop conversation state. See package doc.
@@ -111,9 +127,12 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.MaxIterations <= 0 {
 		cfg.MaxIterations = defaultMaxIterations
 	}
+	if cfg.EnableFetchToolResult && cfg.PayloadResolver == nil {
+		return nil, errors.New("agent: Config.EnableFetchToolResult requires Config.PayloadResolver")
+	}
 	a := &Agent{
 		cfg:      cfg,
-		tools:    make(map[string]AgentTool, len(cfg.Tools)),
+		tools:    make(map[string]AgentTool, len(cfg.Tools)+1),
 		steering: make(chan llm.Message, steeringBufferSize),
 	}
 	for _, t := range cfg.Tools {
@@ -123,7 +142,19 @@ func New(cfg Config) (*Agent, error) {
 		if t.Handler == nil {
 			return nil, fmt.Errorf("agent: tool %q has nil Handler", t.Name)
 		}
+		if cfg.EnableFetchToolResult && t.Name == fetchToolResultName {
+			return nil, fmt.Errorf("agent: tool name %q is reserved when EnableFetchToolResult is set", t.Name)
+		}
 		a.tools[t.Name] = t
+	}
+	if cfg.EnableFetchToolResult {
+		fetch := newFetchToolResultTool(a)
+		a.tools[fetch.Name] = fetch
+		// Mirror into a.cfg.Tools so buildRequest's tools-slice iteration
+		// surfaces the meta-tool to the LLM. Append AT THE END (after
+		// the caller's tools) so callers can reason about tool ordering
+		// without surprise.
+		a.cfg.Tools = append(a.cfg.Tools, fetch)
 	}
 	return a, nil
 }
@@ -391,28 +422,38 @@ func (a *Agent) executeToolCalls(
 		isError := false
 		startedAt := time.Now()
 
+		// Effective per-tool budget. Resolved here so the same value
+		// applies to the handler's result AND to AfterToolCall overrides
+		// — a hook that doubles the summary length without realizing it
+		// would otherwise sneak past the budget.
+		tool, toolFound := a.tools[info.Name]
+		maxSize := a.cfg.DefaultMaxSummarySize
+		if toolFound && tool.MaxSummarySize > 0 {
+			maxSize = tool.MaxSummarySize
+		}
+		if maxSize <= 0 {
+			maxSize = DefaultMaxSummarySize
+		}
+
 		if skip {
 			if errorResult == "" {
 				errorResult = defaultBlockedMessage
 			}
-			result = Result{Content: errorResult}
+			result = Result{Summary: errorResult}
+			isError = true
+		} else if !toolFound {
+			result = Result{Summary: defaultUnknownToolMessage + ": " + info.Name}
 			isError = true
 		} else {
-			tool, ok := a.tools[info.Name]
-			if !ok {
-				result = Result{Content: defaultUnknownToolMessage + ": " + info.Name}
+			if !yield(EventToolStart{ToolCallID: call.ID, Name: call.Name, Arguments: call.Arguments}, nil) {
+				return nil, false
+			}
+			r, err := tool.Handler(ctx, info.Arguments)
+			if err != nil {
+				result = Result{Summary: err.Error()}
 				isError = true
 			} else {
-				if !yield(EventToolStart{ToolCallID: call.ID, Name: call.Name, Arguments: call.Arguments}, nil) {
-					return nil, false
-				}
-				r, err := tool.Handler(ctx, info.Arguments)
-				if err != nil {
-					result = Result{Content: err.Error()}
-					isError = true
-				} else {
-					result = r
-				}
+				result = r
 			}
 		}
 
@@ -428,32 +469,49 @@ func (a *Agent) executeToolCalls(
 			}
 		}
 
+		// Budget enforcement. The tool author's bug if violated; we
+		// don't abort the run, we replace the result with a clear error
+		// so the model sees the violation and the tool author sees it
+		// in tests / event logs.
+		effective := result.effectiveSummary()
+		if len(effective) > maxSize {
+			result = Result{
+				Summary: fmt.Sprintf("tool %q returned a summary of %d bytes; max is %d. Bug in the tool's summary budgeting; use FullPayloadRef for large outputs.",
+					info.Name, len(effective), maxSize),
+				FullPayloadRef: result.FullPayloadRef,
+			}
+			isError = true
+			effective = result.Summary
+		}
+
 		endedAt := time.Now()
 
 		a.mu.Lock()
 		a.toolLog = append(a.toolLog, ToolLogEntry{
-			Iteration:  iteration,
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Arguments:  call.Arguments,
-			Result:     result.Content,
-			IsError:    isError,
-			StartedAt:  startedAt,
-			EndedAt:    endedAt,
+			Iteration:      iteration,
+			ToolCallID:     call.ID,
+			Name:           call.Name,
+			Arguments:      call.Arguments,
+			Result:         effective,
+			FullPayloadRef: result.FullPayloadRef,
+			IsError:        isError,
+			StartedAt:      startedAt,
+			EndedAt:        endedAt,
 		})
 		a.mu.Unlock()
 
 		results = append(results, llm.ToolResultBlock{
 			ToolCallID: call.ID,
-			Content:    result.Content,
+			Content:    effective,
 			IsError:    isError,
 		})
 
 		if !yield(EventToolEnd{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Result:     result.Content,
-			IsError:    isError,
+			ToolCallID:     call.ID,
+			Name:           call.Name,
+			Result:         effective,
+			IsError:        isError,
+			FullPayloadRef: result.FullPayloadRef,
 		}, nil) {
 			return nil, false
 		}
