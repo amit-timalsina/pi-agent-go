@@ -23,7 +23,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Run IDs in the form `run_<unix-ns-hex>_<8-rand-hex>` (sortable, dep-free).
 - Buffered steering channel (capacity 16) drained at iteration boundaries.
 - Sequential tool execution.
-- Example: `examples/hello_agent` runnable against Anthropic API.
+- Examples (all verified end-to-end against the Anthropic API):
+  - `examples/hello_agent` — Typed[I,O] tool, BeforeToolCall hook
+    logging.
+  - `examples/with_hooks` — all three hooks live: BeforeToolCall
+    denying dangerous commands, AfterToolCall redacting secrets,
+    OnSteering dropping prompt-injection attempts.
+  - `examples/steering` — cross-goroutine Steer injection from a
+    watcher goroutine; the agent picks up the steering at the next
+    iteration boundary and adjusts behavior.
+  - `examples/multi_tool` — three typed tools chained across
+    iterations, with Snapshot().ToolLog audit trail and per-call
+    latencies printed at the end.
 - Tests covering: lifecycle events, tool execution, hook short-circuiting
   (skip/override/error), steering inject + drop, MaxIterations cap, Snapshot,
   Reset-while-running panic, ErrAlreadyRunning concurrent-Run rejection,
