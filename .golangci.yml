@@ -1,0 +1,29 @@
+# pi-agent-go linter config. Linters chosen for high signal:noise —
+# gofmt/goimports (style), govet/staticcheck (correctness), errcheck
+# (missed error returns), ineffassign (dead assignments), unconvert
+# (no-op type conversions), unparam (unused parameters).
+#
+# Intentionally NOT enabled: gocyclo, funlen, lll, gocognit — they
+# reward decomposition for decomposition's sake.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 10
