@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-11
+
+Initial public release. Real-API verified against Anthropic across
+four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
+
 ### Added
 
 - Initial release skeleton: `Agent`, `Config`, `New`, `Run`, `RunMessage`,
@@ -46,4 +51,5 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.0.0...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/amit-timalsina/pi-agent-go/releases/tag/v0.1.0
