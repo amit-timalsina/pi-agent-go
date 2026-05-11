@@ -37,7 +37,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Migration:
 
   ```go
-  // before
+  // before — agent owns storage indirection
   return agent.Result{
       Summary: "top correlations: ...",
       FullPayloadRef: &agent.PayloadRef{
@@ -45,19 +45,51 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
           Size: 12345, MimeType: "application/json",
       },
   }, nil
-  // ...and Config{EnableFetchToolResult: true,
-  //               PayloadResolver: &MemoryPayloadResolver{...}}.
+  // ...with agent.New(agent.Config{
+  //     EnableFetchToolResult: true,
+  //     PayloadResolver:       &MemoryPayloadResolver{...},
+  //     ...
+  // })
 
-  // after — tool writes to a tempfile, returns its path as the hint
-  path := filepath.Join(os.TempDir(), "corr-matrix.json")
-  _ = os.WriteFile(path, fullBytes, 0o600)
+  // after — tool owns storage; agent just propagates the hint
+  f, _ := os.CreateTemp("", "corr-matrix-*.json")
+  _, _ = f.Write(fullBytes)
+  _ = f.Close()
   return agent.Result{
-      Summary:         "top correlations: ... full matrix at " + path,
-      FullPayloadHint: path,
+      Summary:         "top correlations: ... full matrix at " + f.Name(),
+      FullPayloadHint: f.Name(),
   }, nil
-  // ...and register a small read_file tool the model can call with
-  // {"path": "..."} when it needs the rest. No Config flags needed.
+
+  // ...and register a sibling read tool the model can call with
+  // {"path": "..."} when the summary is insufficient. Wide the budget
+  // because the whole point of this tool is to return the unbounded
+  // payload.
+  readTool := agent.Raw(
+      "read_file",
+      "Read the file at the given path. Returns its raw bytes as text.",
+      json.RawMessage(`{"type":"object",
+                        "properties":{"path":{"type":"string"}},
+                        "required":["path"],
+                        "additionalProperties":false}`),
+      func(_ context.Context, raw json.RawMessage) (agent.Result, error) {
+          var args struct{ Path string `json:"path"` }
+          _ = json.Unmarshal(raw, &args)
+          body, err := os.ReadFile(args.Path)
+          if err != nil { return agent.Result{}, err }
+          return agent.Result{Summary: string(body)}, nil
+      },
+  )
+  readTool.MaxSummarySize = 256 * 1024
+
+  agent.New(agent.Config{
+      Tools: []agent.AgentTool{correlationTool, readTool},
+      // No Config flags needed for hints.
+  })
   ```
+
+  Production consumers should confine `read_file`-style tools to a
+  known-safe path prefix instead of accepting any model-supplied path.
+  See `examples/bounded_results` for the working pattern.
 
 ## [0.1.1] - 2026-05-11
 

@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -132,10 +131,18 @@ func buildCorrelationTool() agent.AgentTool {
 			top5 := entries[:5]
 
 			fullBytes, _ := json.Marshal(entries)
-			path := filepath.Join(os.TempDir(), "pi-agent-corr-matrix.json")
-			if err := os.WriteFile(path, fullBytes, 0o600); err != nil {
+			f, err := os.CreateTemp("", "pi-agent-corr-matrix-*.json")
+			if err != nil {
+				return agent.Result{}, fmt.Errorf("create temp: %w", err)
+			}
+			if _, err := f.Write(fullBytes); err != nil {
+				_ = f.Close()
 				return agent.Result{}, fmt.Errorf("write full matrix: %w", err)
 			}
+			if err := f.Close(); err != nil {
+				return agent.Result{}, fmt.Errorf("close full matrix: %w", err)
+			}
+			path := f.Name()
 
 			var sb strings.Builder
 			sb.WriteString("Top 5 correlations (by |r|):\n")
@@ -156,8 +163,13 @@ func buildCorrelationTool() agent.AgentTool {
 // buildReadMatrixTool registers a tiny "read full matrix" tool the model
 // can call when the summary is insufficient. The path is opaque to
 // pi-agent-go — the caller supplies whatever retrieval surface fits.
+//
+// NOTE for production consumers: this example accepts any path the model
+// supplies. Real consumers should confine to a known prefix (e.g.
+// require args.Path to start with a session-scoped tempdir) or use an
+// indirection layer (id -> path), never the raw model-supplied path.
 func buildReadMatrixTool() agent.AgentTool {
-	return agent.Raw(
+	t := agent.Raw(
 		"read_full_matrix",
 		"Read the full correlation matrix at the given path (produced by correlation_matrix). Returns the raw JSON of all pairs.",
 		json.RawMessage(`{
@@ -185,6 +197,11 @@ func buildReadMatrixTool() agent.AgentTool {
 			return agent.Result{Summary: string(body)}, nil
 		},
 	)
+	// 50-var correlation matrix serializes to ~48 KiB JSON, above the
+	// 32 KiB default. The whole point of read_full_matrix is to return
+	// the unbounded payload, so widen the budget to match.
+	t.MaxSummarySize = 256 * 1024
+	return t
 }
 
 func abs(x float64) float64 {

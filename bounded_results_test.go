@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -174,6 +175,72 @@ func TestFullPayloadHintCarriedThroughEvents(t *testing.T) {
 	snap := a.Snapshot()
 	if len(snap.ToolLog) == 0 || snap.ToolLog[0].FullPayloadHint != hint {
 		t.Errorf("ToolLogEntry.FullPayloadHint not carried: %+v", snap.ToolLog)
+	}
+}
+
+// TestHandlerErrorDropsFullPayloadHint pins the documented contract:
+// when a tool handler returns an error, the agent loop replaces the
+// Result with a synthetic IsError=true result whose Summary is the
+// error message. FullPayloadHint is intentionally NOT carried over —
+// the handler erred before it could produce a meaningful payload, so
+// there is nothing to point at.
+func TestHandlerErrorDropsFullPayloadHint(t *testing.T) {
+	tool := agent.Raw(
+		"erring",
+		"always errors",
+		json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
+			// The hint here is a lie — the handler errored. Loop should
+			// discard it rather than mislead observers.
+			return agent.Result{FullPayloadHint: "/should/not/leak"}, errors.New("boom")
+		},
+	)
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			toolCallScript("call_1", "erring", `{}`),
+			textOnlyScript("ack"),
+		},
+	}
+	a, _ := agent.New(agent.Config{LLM: fake, Model: "test", Tools: []agent.AgentTool{tool}})
+	events, _ := collect(t, a.Run(context.Background(), "go"))
+
+	var end agent.EventToolEnd
+	for _, ev := range events {
+		if e, ok := ev.(agent.EventToolEnd); ok {
+			end = e
+		}
+	}
+	if !end.IsError {
+		t.Fatal("expected handler error marked as IsError")
+	}
+	if end.FullPayloadHint != "" {
+		t.Errorf("FullPayloadHint should be dropped on handler error; got %q", end.FullPayloadHint)
+	}
+}
+
+// TestUnknownToolDropsFullPayloadHint pins the same contract for the
+// unknown-tool path: there is no tool, so no hint.
+func TestUnknownToolDropsFullPayloadHint(t *testing.T) {
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			toolCallScript("call_1", "does_not_exist", `{}`),
+			textOnlyScript("ack"),
+		},
+	}
+	a, _ := agent.New(agent.Config{LLM: fake, Model: "test"})
+	events, _ := collect(t, a.Run(context.Background(), "go"))
+
+	var end agent.EventToolEnd
+	for _, ev := range events {
+		if e, ok := ev.(agent.EventToolEnd); ok {
+			end = e
+		}
+	}
+	if !end.IsError {
+		t.Fatal("expected unknown-tool result marked as IsError")
+	}
+	if end.FullPayloadHint != "" {
+		t.Errorf("FullPayloadHint should be empty on unknown-tool path; got %q", end.FullPayloadHint)
 	}
 }
 

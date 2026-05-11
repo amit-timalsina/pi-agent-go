@@ -33,9 +33,9 @@ const DefaultMaxSummarySize = 32 * 1024
 // Trivially-small tool outputs leave FullPayloadHint empty; Summary IS the
 // full output. Large structured outputs write the full payload somewhere
 // retrievable (tempfile, S3, durable store) and set FullPayloadHint to
-// the locator, with a bounded summary in Summary. Mario's pi-mono uses
-// this pattern with `/tmp/bash-<id>.log` paths retrieved via the existing
-// Read tool — no framework abstraction needed.
+// the locator, with a bounded summary in Summary. The agent loop never
+// reads the hint; the caller is responsible for registering a retrieval
+// tool the model can invoke when the summary is insufficient.
 type Result struct {
 	// Summary is the bounded text fed back to the model as the tool's
 	// response. Must be <= the tool's effective MaxSummarySize.
@@ -47,6 +47,15 @@ type Result struct {
 	// just surfaces the value on EventToolEnd.FullPayloadHint and
 	// ToolLogEntry.FullPayloadHint. The model retrieves the content via
 	// whatever existing tool the caller registered for that purpose.
+	//
+	// Carry-through semantics:
+	//   - Handler returns (Result, nil): hint propagates as-is.
+	//   - Handler returns (Result, err): the loop replaces Result with a
+	//     synthetic error result and DROPS FullPayloadHint — the handler
+	//     errored before it could produce a meaningful payload.
+	//   - Budget violation (Summary exceeds MaxSummarySize): the loop
+	//     rewrites Summary but PRESERVES FullPayloadHint — the payload
+	//     itself was fine; only the bounded summary was over budget.
 	FullPayloadHint string
 
 	// Content is the deprecated v0.1.x alias for Summary. When set and
