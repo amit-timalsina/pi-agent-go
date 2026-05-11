@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-11
+
+First breaking change since v0.1.x. Two PRs landed: storage-policy is now
+the tool's job (FullPayloadHint replaces PayloadResolver/fetch_tool_result),
+and a per-iteration TransformContext hook + mutable SystemPrompt let
+long-running agents reshape context without rebuilding the Agent. Both
+changes are WWMD-aligned with Mario Zechner's pi-mono.
+
+Requires `github.com/amit-timalsina/pi-llm-go` ≥ v0.2.0.
+
 ### Added
 
 - `Config.TransformContext func(ctx, []llm.Message) ([]llm.Message, error)`
@@ -178,6 +188,7 @@ four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amit-timalsina/pi-agent-go/releases/tag/v0.1.0
