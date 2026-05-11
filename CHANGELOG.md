@@ -20,6 +20,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is in progress. The change takes effect at the next `buildRequest`
   (top of the next iteration). The system prompt now lives on mutable
   agent state initialized from `Config.SystemPrompt` at `New()`.
+  Note: calling `SetSystemPrompt` from inside `TransformContext` lands
+  on iteration N+1, not N — see the godoc on `TransformContext` for
+  the precise ordering contract.
+- `RunSnapshot.SystemPrompt` — the live system prompt at snapshot
+  time, so review UIs and audit consumers see the value that will be
+  used on the next iteration.
 - `ErrTransformContext` sentinel — `errors.Is`-matchable wrapper for
   caller errors out of `Config.TransformContext` (or for the "returned
   nil slice" contract violation). The underlying error is preserved

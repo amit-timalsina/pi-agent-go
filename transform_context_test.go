@@ -12,9 +12,17 @@ import (
 	llm "github.com/amit-timalsina/pi-llm-go"
 )
 
-// TestSetSystemPromptTakesEffectOnNextIteration verifies that a call to
-// SetSystemPrompt mid-run changes Request.System on the next LLM call,
-// while the iteration already in flight finishes against the prior value.
+// TestSetSystemPromptTakesEffectOnNextIteration verifies the full
+// contract: iteration 1 sees the initial prompt, SetSystemPrompt fired
+// between iter 1's LLM call and iter 2's buildRequest takes effect on
+// iter 2's wire request.
+//
+// Determinism note: BeforeToolCall is the only point at which the loop
+// guarantees ordering between iter N's LLM call (already completed) and
+// iter N+1's buildRequest (yet to fire). Mutating from inside the hook
+// is the right way to test this — racing a goroutine against the run
+// loop would let the test pass even if SetSystemPrompt were buggy
+// (because the write might happen to land before iter 1).
 func TestSetSystemPromptTakesEffectOnNextIteration(t *testing.T) {
 	fake := &fakeLLM{
 		scripts: [][]llm.StreamEvent{
@@ -22,37 +30,20 @@ func TestSetSystemPromptTakesEffectOnNextIteration(t *testing.T) {
 			textOnlyScript("done"),                            // iter 2
 		},
 	}
-	a, _ := agent.New(agent.Config{
+	var a *agent.Agent
+	a, _ = agent.New(agent.Config{
 		LLM:          fake,
 		Model:        "test",
 		SystemPrompt: "initial-system",
 		Tools:        []agent.AgentTool{echoTool()},
 		BeforeToolCall: func(_ context.Context, _ agent.RunContext, _ agent.ToolCallInfo) (bool, string, error) {
-			// Hook fires between iter 1's LLM call and iter 2's. Mutating
-			// the system prompt here proves the change is picked up on the
-			// next buildRequest.
+			// Fires after iter 1's LLM call completes and before iter 2's
+			// buildRequest. Mutating here pins the "next iteration sees
+			// the update" contract without any cross-goroutine race.
+			a.SetSystemPrompt("updated-system")
 			return false, "", nil
 		},
-		AfterToolCall: func(_ context.Context, _ agent.RunContext, _ agent.ToolCallInfo, _ agent.Result, _ bool) (*agent.Result, error) {
-			return nil, nil
-		},
 	})
-
-	// Mutate the prompt from inside an AfterToolCall closure so it lands
-	// before iter 2's buildRequest. We piggy-back via SetSystemPrompt from
-	// the test goroutine instead — the harness above is symmetric.
-	go func() {
-		// Wait until iter 1 has finished by spinning on Snapshot.Iteration.
-		for {
-			s := a.Snapshot()
-			if s.Iteration >= 1 && !s.IsRunning {
-				return
-			}
-		}
-	}()
-
-	// Drive the run synchronously, calling SetSystemPrompt between iters.
-	go func() { a.SetSystemPrompt("updated-system") }()
 	if _, err := collect(t, a.Run(context.Background(), "go")); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -60,14 +51,12 @@ func TestSetSystemPromptTakesEffectOnNextIteration(t *testing.T) {
 	if len(fake.requests) != 2 {
 		t.Fatalf("expected 2 LLM requests, got %d", len(fake.requests))
 	}
-	// Iter 1 may see either value depending on goroutine scheduling, but
-	// iter 2 must see the updated prompt because SetSystemPrompt is called
-	// before the run finishes and the second buildRequest runs after the
-	// tool result is appended.
+	if fake.requests[0].System != "initial-system" {
+		t.Errorf("iter 1 System=%q, want %q (pin the initial value, not just the update)", fake.requests[0].System, "initial-system")
+	}
 	if fake.requests[1].System != "updated-system" {
 		t.Errorf("iter 2 System=%q, want %q", fake.requests[1].System, "updated-system")
 	}
-	// Live getter mirrors the latest set.
 	if got := a.SystemPrompt(); got != "updated-system" {
 		t.Errorf("SystemPrompt()=%q, want updated-system", got)
 	}
@@ -131,12 +120,18 @@ func TestSetSystemPromptConcurrentReadAndWrite(t *testing.T) {
 }
 
 // TestTransformContextAppliedEveryIteration verifies the hook is called
-// at the top of every iteration with the current transcript, and that
-// its returned slice (not the original) is used in the request.
+// at the top of every iteration with the live transcript, and that its
+// returned slice (not the original) is used in the request.
 func TestTransformContextAppliedEveryIteration(t *testing.T) {
 	var calls int
+	// observedCounts[i] is the transcript length the hook saw on call i+1.
+	// Pins the "transform sees the real growing transcript" contract:
+	// iter 1: user (1)
+	// iter 2: user, assistant-with-tool-call, tool-result (3)
+	var observedCounts []int
 	transform := func(_ context.Context, messages []llm.Message) ([]llm.Message, error) {
 		calls++
+		observedCounts = append(observedCounts, len(messages))
 		// Append a synthetic user message that the LLM should see but
 		// that should NOT be persisted in the durable transcript.
 		out := make([]llm.Message, len(messages), len(messages)+1)
@@ -168,6 +163,13 @@ func TestTransformContextAppliedEveryIteration(t *testing.T) {
 
 	if calls != 2 {
 		t.Errorf("TransformContext called %d times, want 2 (once per iteration)", calls)
+	}
+	wantCounts := []int{1, 3}
+	if len(observedCounts) != len(wantCounts) ||
+		observedCounts[0] != wantCounts[0] ||
+		observedCounts[1] != wantCounts[1] {
+		t.Errorf("transcript size per iter = %v, want %v (iter 1: user; iter 2: user+assistant+tool-result)",
+			observedCounts, wantCounts)
 	}
 
 	// Every request must contain the synthetic message as the LAST entry.

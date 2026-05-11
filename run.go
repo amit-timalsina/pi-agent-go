@@ -20,12 +20,17 @@ type RunContext struct {
 // RunSnapshot is an immutable point-in-time view of an Agent's state.
 // Returned by Agent.Snapshot(). Safe to share across goroutines.
 type RunSnapshot struct {
-	RunID     string
-	Iteration int
-	Messages  []llm.Message
-	ToolLog   []ToolLogEntry
-	LastUsage llm.Usage
-	IsRunning bool
+	RunID string
+	// SystemPrompt is the live system prompt at snapshot time. Mutable
+	// via Agent.SetSystemPrompt; matches what the next iteration's LLM
+	// call will see (unless SetSystemPrompt is called between snapshot
+	// and that iteration's buildRequest).
+	SystemPrompt string
+	Iteration    int
+	Messages     []llm.Message
+	ToolLog      []ToolLogEntry
+	LastUsage    llm.Usage
+	IsRunning    bool
 }
 
 // ToolLogEntry records one tool invocation for diagnostic / audit

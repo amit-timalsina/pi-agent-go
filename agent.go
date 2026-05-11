@@ -108,6 +108,14 @@ type Config struct {
 	// only the slice fed into llm.Request is. Snapshot() continues to
 	// return the original transcript.
 	//
+	// Ordering with SetSystemPrompt: the system prompt is read BEFORE
+	// TransformContext runs. If the hook calls Agent.SetSystemPrompt,
+	// the new prompt takes effect on iteration N+1, not N. To set both
+	// system and messages atomically for the current iteration, do both
+	// mutations BEFORE the run reaches buildRequest — e.g. via
+	// BeforeToolCall on the prior iteration, or from a separate goroutine
+	// before Run starts.
+	//
 	// Mirrors Mario Zechner's pi-mono `transformContext` (see
 	// packages/agent/src/types.ts).
 	TransformContext func(ctx context.Context, messages []llm.Message) ([]llm.Message, error)
@@ -274,6 +282,13 @@ func (a *Agent) Steer(ctx context.Context, msg llm.Message) error {
 // Pair with Steer to inject a user message at the same iteration
 // boundary when the prompt change needs an accompanying nudge to the
 // model.
+//
+// Calling SetSystemPrompt from inside Config.TransformContext does NOT
+// affect the current iteration: buildRequest reads the system prompt
+// before invoking the hook. The change lands on iteration N+1. To
+// change both system and messages atomically for iteration N, perform
+// the SetSystemPrompt call before the run reaches that iteration's
+// buildRequest (e.g. from BeforeToolCall on iteration N-1).
 func (a *Agent) SetSystemPrompt(prompt string) {
 	a.mu.Lock()
 	a.systemPrompt = prompt
@@ -294,10 +309,11 @@ func (a *Agent) Snapshot() RunSnapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	out := RunSnapshot{
-		RunID:     a.runID,
-		Iteration: a.iteration,
-		LastUsage: a.lastUsage,
-		IsRunning: a.running,
+		RunID:        a.runID,
+		SystemPrompt: a.systemPrompt,
+		Iteration:    a.iteration,
+		LastUsage:    a.lastUsage,
+		IsRunning:    a.running,
 	}
 	if len(a.messages) > 0 {
 		out.Messages = make([]llm.Message, len(a.messages))
