@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-11
+
+CI + lint cleanup. No user-visible API changes vs v0.1.0.
+
+### Added
+
+- Dependabot config for `gomod` + `github-actions` ecosystems (weekly).
+- README badges: CI status, Go Reference (pkg.go.dev), Go Report Card, MIT license.
+
+### Changed
+
+- Bumped go.mod Go floor to **1.24** (transitively required by
+  `github.com/invopop/jsonschema` v0.14.0). Users on Go 1.23 should
+  stay on the older release or upgrade.
+- Pinned `golangci-lint-action` to v8 and the linter binary to v2.12.2.
+- Internal: dropped unused `assistantMsg` parameter from
+  `executeToolCalls`. Method is unexported; no public-API impact.
+- gofmt -s normalizations across the tree.
+
 ## [0.1.0] - 2026-05-11
 
 Initial public release. Real-API verified against Anthropic across
@@ -51,5 +70,6 @@ four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amit-timalsina/pi-agent-go/releases/tag/v0.1.0
