@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	llm "github.com/amittimalsina/pi-llm-go"
-	agent "github.com/amittimalsina/pi-agent-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
+	agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 // fakeLLM is a scripted llm.LLM. Each Stream call consumes one script from

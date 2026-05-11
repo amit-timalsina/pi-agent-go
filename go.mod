@@ -1,4 +1,4 @@
-module github.com/amittimalsina/pi-agent-go
+module github.com/amit-timalsina/pi-agent-go
 
 go 1.24
 

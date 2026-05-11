@@ -4,7 +4,7 @@ This file is the **maintainer's working agreement** for `pi-agent-go`. Keep it s
 
 ## What this repo is
 
-A single-loop agent built on [`pi-llm-go`](https://github.com/amittimalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Tool registry with typed handlers, three hooks (`BeforeToolCall` / `AfterToolCall` / `OnSteering`), and a buffered steering channel for mid-run injection.
+A single-loop agent built on [`pi-llm-go`](https://github.com/amit-timalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Tool registry with typed handlers, three hooks (`BeforeToolCall` / `AfterToolCall` / `OnSteering`), and a buffered steering channel for mid-run injection.
 
 Depends on pi-llm-go's `LLM` interface — track its API and bump in lockstep.
 

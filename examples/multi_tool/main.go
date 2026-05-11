@@ -18,9 +18,9 @@ import (
 	"math"
 	"os"
 
-	llm "github.com/amittimalsina/pi-llm-go"
-	"github.com/amittimalsina/pi-llm-go/providers/anthropic"
-	agent "github.com/amittimalsina/pi-agent-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
+	"github.com/amit-timalsina/pi-llm-go/providers/anthropic"
+	agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 // --- Tool 1: currency conversion (with stub rates) ---

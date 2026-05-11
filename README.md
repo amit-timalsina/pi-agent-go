@@ -1,6 +1,6 @@
 # pi-agent-go
 
-A minimal single-loop agent on top of [`pi-llm-go`](https://github.com/amittimalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Tool registry with typed handlers, three hooks (`BeforeToolCall` / `AfterToolCall` / `OnSteering`), and a buffered steering channel for mid-run injection.
+A minimal single-loop agent on top of [`pi-llm-go`](https://github.com/amit-timalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Tool registry with typed handlers, three hooks (`BeforeToolCall` / `AfterToolCall` / `OnSteering`), and a buffered steering channel for mid-run injection.
 
 > Status: **v0.x — pre-1.0**. API may change between minor versions; see [CHANGELOG.md](CHANGELOG.md).
 
@@ -11,7 +11,7 @@ If you want an agent harness that's small enough to read in one sitting, this is
 ## Installation
 
 ```bash
-go get github.com/amittimalsina/pi-agent-go
+go get github.com/amit-timalsina/pi-agent-go
 ```
 
 Requires Go 1.23 or later (for `iter.Seq2`).
@@ -26,9 +26,9 @@ import (
     "fmt"
     "os"
 
-    llm "github.com/amittimalsina/pi-llm-go"
-    "github.com/amittimalsina/pi-llm-go/providers/anthropic"
-    agent "github.com/amittimalsina/pi-agent-go"
+    llm "github.com/amit-timalsina/pi-llm-go"
+    "github.com/amit-timalsina/pi-llm-go/providers/anthropic"
+    agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 type AddArgs struct {

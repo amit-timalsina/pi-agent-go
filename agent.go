@@ -37,7 +37,7 @@ import (
 	"sync"
 	"time"
 
-	llm "github.com/amittimalsina/pi-llm-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
 )
 
 // Defaults and tunables.

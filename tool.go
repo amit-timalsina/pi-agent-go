@@ -7,7 +7,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	llm "github.com/amittimalsina/pi-llm-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
 )
 
 // Result is the text-bearing output of a tool handler. Content is what

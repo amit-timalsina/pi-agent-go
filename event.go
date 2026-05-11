@@ -3,7 +3,7 @@ package agent
 import (
 	"encoding/json"
 
-	llm "github.com/amittimalsina/pi-llm-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
 )
 
 // AgentEvent is the sealed sum type emitted during Agent.Run. Consumers

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	llm "github.com/amittimalsina/pi-llm-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
 )
 
 // ToolCallInfo describes a pending tool invocation passed to hooks.

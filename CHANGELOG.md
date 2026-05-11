@@ -44,6 +44,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Dependencies
 
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
-- `github.com/amittimalsina/pi-llm-go` (sibling package).
+- `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amittimalsina/pi-agent-go/compare/v0.0.0...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.0.0...HEAD

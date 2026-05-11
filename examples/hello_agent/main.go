@@ -17,9 +17,9 @@ import (
 	"os"
 	"time"
 
-	llm "github.com/amittimalsina/pi-llm-go"
-	"github.com/amittimalsina/pi-llm-go/providers/anthropic"
-	agent "github.com/amittimalsina/pi-agent-go"
+	llm "github.com/amit-timalsina/pi-llm-go"
+	"github.com/amit-timalsina/pi-llm-go/providers/anthropic"
+	agent "github.com/amit-timalsina/pi-agent-go"
 )
 
 // TimeArgs is the input schema for the get_current_time tool.
