@@ -1,23 +1,28 @@
-// bounded_results: demonstrates Result.Summary + FullPayloadRef with the
-// built-in fetch_tool_result meta-tool.
+// bounded_results: demonstrates Result.Summary + Result.FullPayloadHint
+// without any framework abstraction.
 //
 // Scenario: a `correlation_matrix` tool computes a 50x50 (2500-entry)
 // correlation matrix. Naively returning the whole thing as text would
 // burn ~30k tokens of context per call. Instead, the tool returns:
 //
 //   - Summary: top-5 correlations as a one-line list (~200 chars).
-//   - FullPayloadRef: pointer to memory storage holding the full JSON.
+//   - FullPayloadHint: an opaque locator (here a filesystem path under
+//     /tmp) that observability consumers can surface, and that a separate
+//     read_full_matrix tool can read back when the model decides the
+//     summary is insufficient.
 //
-// The model sees the summary and answers most questions from it. When a
-// question requires the full data, the model calls fetch_tool_result
-// with the call_index — pi-agent-go's built-in meta-tool resolves the
-// payload via the registered MemoryPayloadResolver.
+// pi-agent-go does NOT interpret FullPayloadHint or provide a built-in
+// fetcher — the caller wires up whatever retrieval tool they want. This
+// example registers a tiny read_full_matrix tool that reads the file at
+// the hint path. In real consumers the equivalent might be `read_file`,
+// `http.GET`, or `db.Query`.
 //
 // Two prompts demonstrate the pattern:
 //
 //  1. "What are the top correlations?" — summary suffices.
 //
-//  2. "What's the correlation between vars 7 and 23?" — requires full payload.
+//  2. "What's the correlation between vars 7 and 23?" — model calls
+//     read_full_matrix with the hint path to get the full data.
 //
 //     export ANTHROPIC_API_KEY=...
 //     go run ./examples/bounded_results
@@ -39,11 +44,6 @@ import (
 
 const numVars = 50
 
-// payloadStore is the shared in-memory backing for both the
-// correlation_matrix tool (which writes payloads in) and the agent's
-// PayloadResolver (which reads them out).
-var payloadStore = map[string]string{}
-
 func main() {
 	key := os.Getenv("ANTHROPIC_API_KEY")
 	if key == "" {
@@ -52,18 +52,14 @@ func main() {
 	}
 	provider, _ := anthropic.New(anthropic.Options{APIKey: key})
 
-	corrTool := buildCorrelationTool()
-
 	a, err := agent.New(agent.Config{
-		LLM:          provider,
-		Model:        anthropic.ClaudeSonnet4_6,
-		SystemPrompt: "You are a data-analysis assistant. Use correlation_matrix to compute correlations; reach for fetch_tool_result only when the summary you saw is insufficient for the question.",
-		Tools:        []agent.AgentTool{corrTool},
-		MaxTokens:    1024,
-
-		// Wire up the built-in fetch_tool_result meta-tool.
-		EnableFetchToolResult: true,
-		PayloadResolver:       &agent.MemoryPayloadResolver{Payloads: payloadStore},
+		LLM:   provider,
+		Model: anthropic.ClaudeSonnet4_6,
+		SystemPrompt: "You are a data-analysis assistant. Use correlation_matrix to compute correlations. " +
+			"If a tool result includes a 'full payload at <path>' hint and the summary is insufficient " +
+			"for the question, call read_full_matrix with that path to retrieve the full data.",
+		Tools:     []agent.AgentTool{buildCorrelationTool(), buildReadMatrixTool()},
+		MaxTokens: 1024,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -72,7 +68,7 @@ func main() {
 
 	prompts := []string{
 		"Compute the correlation matrix and tell me the top correlations.",
-		"Now what's the specific correlation between variable 7 and variable 23? Use fetch_tool_result if needed.",
+		"Now what's the specific correlation between variable 7 and variable 23? Use read_full_matrix if needed.",
 	}
 
 	for i, prompt := range prompts {
@@ -95,12 +91,11 @@ func main() {
 				if len(preview) > 200 {
 					preview = preview[:200] + "..."
 				}
-				refMsg := ""
-				if e.FullPayloadRef != nil {
-					refMsg = fmt.Sprintf(" [+payload ref %s/%s, %d bytes]",
-						e.FullPayloadRef.Backend, e.FullPayloadRef.Key, e.FullPayloadRef.Size)
+				hintMsg := ""
+				if e.FullPayloadHint != "" {
+					hintMsg = fmt.Sprintf(" [+hint=%s]", e.FullPayloadHint)
 				}
-				fmt.Fprintf(os.Stderr, "[tool end] %s -> %s%s\n", e.Name, strings.ReplaceAll(preview, "\n", " | "), refMsg)
+				fmt.Fprintf(os.Stderr, "[tool end] %s -> %s%s\n", e.Name, strings.ReplaceAll(preview, "\n", " | "), hintMsg)
 			}
 		}
 		fmt.Println()
@@ -115,7 +110,7 @@ type corrEntry struct {
 func buildCorrelationTool() agent.AgentTool {
 	return agent.Raw(
 		"correlation_matrix",
-		"Compute the correlation matrix across all variables. Returns a summary of the top-5 correlations inline; the full matrix is stored via FullPayloadRef and retrievable via fetch_tool_result.",
+		"Compute the correlation matrix across all variables. Returns the top-5 correlations inline as the summary; the full matrix is written to a tempfile whose path is surfaced as a FullPayloadHint. Use read_full_matrix with that path when you need values beyond the top 5.",
 		json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
 			// Deterministic synthetic matrix; seed by var pair so results
@@ -135,31 +130,78 @@ func buildCorrelationTool() agent.AgentTool {
 			})
 			top5 := entries[:5]
 
-			// Build the bounded summary (~200 chars).
+			fullBytes, _ := json.Marshal(entries)
+			f, err := os.CreateTemp("", "pi-agent-corr-matrix-*.json")
+			if err != nil {
+				return agent.Result{}, fmt.Errorf("create temp: %w", err)
+			}
+			if _, err := f.Write(fullBytes); err != nil {
+				_ = f.Close()
+				return agent.Result{}, fmt.Errorf("write full matrix: %w", err)
+			}
+			if err := f.Close(); err != nil {
+				return agent.Result{}, fmt.Errorf("close full matrix: %w", err)
+			}
+			path := f.Name()
+
 			var sb strings.Builder
 			sb.WriteString("Top 5 correlations (by |r|):\n")
 			for _, e := range top5 {
 				fmt.Fprintf(&sb, "  vars %d~%d: r=%.3f\n", e.A, e.B, e.V)
 			}
-			fmt.Fprintf(&sb, "Full matrix (%d pairs) retrievable via fetch_tool_result.\n", len(entries))
-			summary := sb.String()
-
-			// Build the FULL payload — JSON of all pairs.
-			fullBytes, _ := json.Marshal(entries)
-			key := "corr-matrix-1"
-			payloadStore[key] = string(fullBytes)
+			fmt.Fprintf(&sb, "Full matrix of %d pairs at %s — call read_full_matrix with that path for any pair beyond the top 5.\n",
+				len(entries), path)
 
 			return agent.Result{
-				Summary: summary,
-				FullPayloadRef: &agent.PayloadRef{
-					Backend:  "memory",
-					Key:      key,
-					Size:     int64(len(fullBytes)),
-					MimeType: "application/json",
-				},
+				Summary:         sb.String(),
+				FullPayloadHint: path,
 			}, nil
 		},
 	)
+}
+
+// buildReadMatrixTool registers a tiny "read full matrix" tool the model
+// can call when the summary is insufficient. The path is opaque to
+// pi-agent-go — the caller supplies whatever retrieval surface fits.
+//
+// NOTE for production consumers: this example accepts any path the model
+// supplies. Real consumers should confine to a known prefix (e.g.
+// require args.Path to start with a session-scoped tempdir) or use an
+// indirection layer (id -> path), never the raw model-supplied path.
+func buildReadMatrixTool() agent.AgentTool {
+	t := agent.Raw(
+		"read_full_matrix",
+		"Read the full correlation matrix at the given path (produced by correlation_matrix). Returns the raw JSON of all pairs.",
+		json.RawMessage(`{
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path returned by correlation_matrix as its FullPayloadHint."}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }`),
+		func(_ context.Context, raw json.RawMessage) (agent.Result, error) {
+			var args struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return agent.Result{}, fmt.Errorf("read_full_matrix: invalid arguments: %w", err)
+			}
+			if args.Path == "" {
+				return agent.Result{}, fmt.Errorf("read_full_matrix: path is required")
+			}
+			body, err := os.ReadFile(args.Path)
+			if err != nil {
+				return agent.Result{}, fmt.Errorf("read_full_matrix: read %s: %w", args.Path, err)
+			}
+			return agent.Result{Summary: string(body)}, nil
+		},
+	)
+	// 50-var correlation matrix serializes to ~48 KiB JSON, above the
+	// 32 KiB default. The whole point of read_full_matrix is to return
+	// the unbounded payload, so widen the budget to match.
+	t.MaxSummarySize = 256 * 1024
+	return t
 }
 
 func abs(x float64) float64 {

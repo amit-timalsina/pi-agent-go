@@ -66,15 +66,18 @@ type EventToolStart struct {
 }
 
 // EventToolEnd is emitted after a tool finishes executing and any
-// AfterToolCall hook has been applied. FullPayloadRef, when non-nil,
-// points at durable storage holding the full tool output — useful for
-// review UIs that want to offer "view full output" affordances.
+// AfterToolCall hook has been applied. FullPayloadHint, when non-empty,
+// is an opaque caller-defined string the tool surfaced alongside its
+// bounded Summary — typically a file path, URL, or storage key the
+// model can retrieve via a separately-registered tool (e.g. a Read
+// tool). The agent does not interpret it; it just surfaces it here and
+// on ToolLogEntry for observability.
 type EventToolEnd struct {
-	ToolCallID     string
-	Name           string
-	Result         string
-	IsError        bool
-	FullPayloadRef *PayloadRef
+	ToolCallID      string
+	Name            string
+	Result          string
+	IsError         bool
+	FullPayloadHint string
 }
 
 // EventRunEnd is the terminal event for a Run. FinalMessage is the last
