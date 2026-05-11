@@ -8,6 +8,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Config.TransformContext func(ctx, []llm.Message) ([]llm.Message, error)`
+  — optional hook called at the top of every iteration with a copy of
+  the current transcript. The returned slice is used in place of the
+  original for that iteration's LLM call. Use for context-window
+  management (pruning old turns), late-injecting context that should
+  not persist in the durable transcript, or summarizing prior turns.
+  Mirrors Mario Zechner's pi-mono `transformContext` (closes #5).
+- `Agent.SetSystemPrompt(string)` and `Agent.SystemPrompt() string`
+  — mutate/read the live system prompt from any goroutine while a run
+  is in progress. The change takes effect at the next `buildRequest`
+  (top of the next iteration). The system prompt now lives on mutable
+  agent state initialized from `Config.SystemPrompt` at `New()`.
+  Note: calling `SetSystemPrompt` from inside `TransformContext` lands
+  on iteration N+1, not N — see the godoc on `TransformContext` for
+  the precise ordering contract.
+- `RunSnapshot.SystemPrompt` — the live system prompt at snapshot
+  time, so review UIs and audit consumers see the value that will be
+  used on the next iteration.
+- `ErrTransformContext` sentinel — `errors.Is`-matchable wrapper for
+  caller errors out of `Config.TransformContext` (or for the "returned
+  nil slice" contract violation). The underlying error is preserved
+  via `%w` for `errors.Unwrap` / `errors.As` inspection.
+
 - `Result.FullPayloadHint string` (opaque) — tools surface a free-form
   locator (file path, URL, storage key) alongside their bounded `Summary`.
   pi-agent-go does not interpret it; it just propagates the value onto
