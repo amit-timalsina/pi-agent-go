@@ -124,6 +124,15 @@ type Config struct {
 	Thinking    *llm.ThinkingConfig
 
 	// Optional hooks. nil means "no-op."
+	//
+	// Concurrency: under ToolExecution = ToolExecutionParallel,
+	// AfterToolCall may be invoked concurrently from multiple
+	// goroutines (one per in-flight tool call). BeforeToolCall stays
+	// sequential in source order even under parallel mode — Mario's
+	// design preserves the "hooks see calls in order" invariant for
+	// preflight even when execution is concurrent. Hook authors must
+	// protect any shared state externally. OnSteering is never called
+	// concurrently with itself or with any other hook.
 	BeforeToolCall BeforeToolCallHook
 	AfterToolCall  AfterToolCallHook
 	OnSteering     OnSteeringHook
@@ -534,20 +543,17 @@ type toolOutcome struct {
 // is invoked once the loop has decided the call should proceed.
 //
 // Safe to call from multiple goroutines under ToolExecutionParallel:
-// reads only immutable closure data (cfg, tools map) and produces a
-// fully-owned toolOutcome. The caller serializes writes to a.toolLog
-// and yields of the resulting end event.
+// reads only immutable closure data (cfg, tools map) and the
+// caller-owned preflightResult, and produces a fully-owned
+// toolOutcome. The caller serializes writes to a.toolLog and yields
+// of the resulting end event.
 func (a *Agent) executeOneToolCall(
 	ctx context.Context,
 	iteration int,
 	call llm.ToolCallBlock,
-	info ToolCallInfo,
-	rc RunContext,
-	tool AgentTool,
-	toolFound bool,
-	skip bool,
-	skipMsg string,
+	pre preflightResult,
 ) (toolOutcome, error) {
+	info, rc, tool, toolFound, skip, skipMsg := pre.info, pre.rc, pre.tool, pre.toolFound, pre.skip, pre.skipMsg
 	startedAt := time.Now()
 
 	// Effective per-tool budget. Resolved here so the same value
@@ -713,7 +719,7 @@ func (a *Agent) executeToolCallsSequential(
 				return nil, false
 			}
 		}
-		outcome, err := a.executeOneToolCall(ctx, iteration, call, pre.info, pre.rc, pre.tool, pre.toolFound, pre.skip, pre.skipMsg)
+		outcome, err := a.executeOneToolCall(ctx, iteration, call, pre)
 		if err != nil {
 			yield(nil, err)
 			return nil, false
@@ -769,7 +775,7 @@ func (a *Agent) executeToolCallsParallel(
 			// Skip / unknown — produce the outcome synchronously now so
 			// Phase 2 can drain it through the same channel ordering as
 			// real Handler runs.
-			outcome, err := a.executeOneToolCall(ctx, iteration, call, pre.info, pre.rc, pre.tool, pre.toolFound, pre.skip, pre.skipMsg)
+			outcome, err := a.executeOneToolCall(ctx, iteration, call, pre)
 			if err != nil {
 				yield(nil, err)
 				return nil, false
@@ -783,34 +789,45 @@ func (a *Agent) executeToolCallsParallel(
 	// for the async slots; pipe outcomes (and their source index) over
 	// a buffered channel. Buffered to len(calls) so no goroutine ever
 	// blocks on send — every slot produces exactly one outcome.
+	//
+	// We own the CancelFunc directly (not just errgroup's implicit one)
+	// so that a consumer-abort path can signal in-flight Handlers via
+	// gctx.Done(). errgroup.WithContext only cancels its derived ctx on
+	// the FIRST non-nil return from g.Go — not on yield returning false.
+	parCtx, parCancel := context.WithCancel(ctx)
+	defer parCancel()
 	type finished struct {
 		idx     int
 		outcome toolOutcome
 	}
 	done := make(chan finished, len(calls))
-	g, gctx := errgroup.WithContext(ctx)
+	g, gctx := errgroup.WithContext(parCtx)
 	for i := range slots {
-		i := i
 		if slots[i].immediate != nil {
 			done <- finished{idx: i, outcome: *slots[i].immediate}
 			continue
 		}
 		s := slots[i]
 		g.Go(func() error {
-			outcome, err := a.executeOneToolCall(gctx, iteration, s.call, s.pre.info, s.pre.rc, s.pre.tool, s.pre.toolFound, s.pre.skip, s.pre.skipMsg)
+			outcome, err := a.executeOneToolCall(gctx, iteration, s.call, s.pre)
 			if err != nil {
 				// Returning err cancels gctx; other handlers see the
 				// cancellation. Caller surfaces the error after Wait().
 				return err
 			}
+			// Go 1.22+ per-iteration `i` is goroutine-safe — no
+			// `i := i` shadow needed.
 			done <- finished{idx: i, outcome: outcome}
 			return nil
 		})
 	}
 
 	// Drain finished outcomes in FINISH ORDER while goroutines run.
-	// Closing `done` only after Wait() returns lets us know when every
-	// goroutine has reported (or errored).
+	// `waitDone` closes once every goroutine has returned (success or
+	// error). We hold both signals because g.Wait blocks until all
+	// goroutines complete, which lets us detect "all done" without
+	// counting outcomes against pending while goroutines are still
+	// in-flight.
 	var (
 		waitErr  error
 		waitDone = make(chan struct{})
@@ -821,56 +838,52 @@ func (a *Agent) executeToolCallsParallel(
 	}()
 
 	outcomes := make([]toolOutcome, len(calls))
-	gotResult := make([]bool, len(calls))
 	pending := len(calls)
+DRAIN:
 	for pending > 0 {
 		select {
 		case f := <-done:
 			outcomes[f.idx] = f.outcome
-			gotResult[f.idx] = true
 			pending--
 			if !yield(f.outcome.endEvent, nil) {
-				// Consumer aborted. Cancel via shared ctx (done by
-				// errgroup when gctx is cancelled — but errgroup only
-				// cancels gctx on Wait's first non-nil return, not on
-				// consumer abort). Wait for goroutines to settle so
-				// they don't outlive the run.
-				//
-				// We can't easily cancel gctx here without owning the
-				// CancelFunc; relying on consumer to cancel ctx for
-				// real shutdown. For test purposes, we still wait for
-				// in-flight handlers.
+				// Consumer aborted. Cancel the context we own so
+				// in-flight Handlers honoring ctx.Done() unwind
+				// immediately; wait for them to settle so they don't
+				// outlive the run, then return.
+				parCancel()
 				<-waitDone
 				return nil, false
 			}
 		case <-waitDone:
-			// All goroutines have returned. If g.Wait errored before
-			// every outcome made it onto the channel, drain whatever
-			// arrived and bail.
+			// All goroutines have returned. Either an error short-
+			// circuited the rest (waitErr != nil), or every Handler
+			// completed cleanly and the remaining outcomes are buffered
+			// in `done`. Switch to a plain drain of the buffered
+			// channel so we don't spin on the always-ready closed
+			// waitDone.
 			if waitErr != nil {
 				yield(nil, waitErr)
 				return nil, false
 			}
-			// Otherwise the channel must have buffered the remaining
-			// outcomes (every g.Go that returned nil sent before
-			// returning). Fall through to drain them via select again.
+			break DRAIN
 		}
 	}
-	<-waitDone
-	if waitErr != nil {
-		yield(nil, waitErr)
-		return nil, false
-	}
-
-	// Phase 3 (sequential): assemble tool_result blocks and ToolLog
-	// entries in SOURCE order, regardless of finish order.
-	a.mu.Lock()
-	for i := range outcomes {
-		if !gotResult[i] {
-			a.mu.Unlock()
-			yield(nil, fmt.Errorf("agent: parallel tool execution did not produce outcome for call %d", i))
+	// Drain any outcomes still buffered after waitDone fired
+	// (Handlers that finished while we were blocked in yield).
+	for pending > 0 {
+		f := <-done
+		outcomes[f.idx] = f.outcome
+		pending--
+		if !yield(f.outcome.endEvent, nil) {
+			parCancel()
 			return nil, false
 		}
+	}
+
+	// Phase 3 (sequential, source order): assemble tool_result blocks
+	// and ToolLog entries in SOURCE order, regardless of finish order.
+	a.mu.Lock()
+	for i := range outcomes {
 		a.toolLog = append(a.toolLog, outcomes[i].logEntry)
 	}
 	a.mu.Unlock()

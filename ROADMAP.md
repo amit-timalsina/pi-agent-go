@@ -7,9 +7,10 @@ Reordering happens when reality changes.
 
 ## Status
 
-- **v0.3.0** shipped 2026-05-12 — parallel tool execution
+- **v0.3.0** landing — parallel tool execution
   (`Config.ToolExecution = ToolExecutionParallel`, per-tool opt-out,
-  source-order tool_result, finish-order EventToolEnd).
+  source-order tool_result, finish-order EventToolEnd). Tag stamped on
+  merge.
 - **v0.2.0** shipped 2026-05-11 — FullPayloadHint + TransformContext +
   SetSystemPrompt (WWMD convergence).
 - **v1.0 ETA:** unknown. v1.0 requires ≥4 weeks production use without
@@ -88,7 +89,7 @@ Reordering happens when reality changes.
 
 ## v1.0 readiness checklist
 
-- [x] Parallel tool execution shipped (v0.3.0); awaiting production
+- [x] Parallel tool execution landed (v0.3.0); awaiting production
       validation under load.
 - [ ] Snapshot resume working end-to-end.
 - [ ] `examples/observability/` shipped and referenced from the README.

@@ -15,16 +15,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Handler + AfterToolCall phases of a batch concurrently when the
   model issues multiple tool calls in one assistant turn.
 - Two-phase contract, mirroring Mario Zechner's pi-agent:
-  - Phase 1 (sequential, source order): BeforeToolCall hook +
-    EventToolStart emission.
-  - Phase 2 (parallel): Handler + AfterToolCall hook run in goroutines
-    via `golang.org/x/sync/errgroup`.
-  - Phase 3 (sequential, source order): `tool_result` blocks in the
-    durable transcript + `ToolLog` entries land in source order
-    regardless of finish order.
-  - `EventToolEnd` events fire in **finish order** so observers see
-    real concurrency happening; sort by `ToolCallID` or read from
-    `Snapshot().ToolLog` if you need source order.
+  - **Preflight (sequential, source order):** BeforeToolCall hook +
+    EventToolStart emission. Inserts immediate outcomes (skipped /
+    unknown tool) into the result channel in this phase so they
+    interleave with parallel outcomes by source position.
+  - **Execute (parallel):** Handler + AfterToolCall hook run in
+    goroutines via `golang.org/x/sync/errgroup`, fed by a buffered
+    `done` channel sized to `len(calls)`. `EventToolEnd` is yielded
+    from the main goroutine as outcomes arrive — **finish order**, so
+    observers see real concurrency. After all outcomes are drained,
+    `tool_result` blocks + `ToolLog` entries are appended in **source
+    order** so the wire transcript and audit log stay stable. Sort by
+    `ToolCallID` or read from `Snapshot().ToolLog` if you need source
+    order on the event stream.
 - Per-tool opt-out: declaring `AgentTool.ExecutionMode = ToolExecutionSequential`
   on any tool in the batch forces the entire batch sequential — safety
   valve for handlers that aren't thread-safe with themselves or with

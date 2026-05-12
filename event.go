@@ -58,7 +58,13 @@ type EventSteering struct {
 }
 
 // EventToolStart is emitted just before a tool's Handler runs, after any
-// BeforeToolCall hook has cleared.
+// BeforeToolCall hook has cleared. NOT emitted when BeforeToolCall
+// requests a skip or when the tool name doesn't match any registered
+// AgentTool — in both cases the call goes straight to a synthetic
+// IsError=true EventToolEnd with no preceding start. This is a small
+// documented divergence from Mario Zechner's pi-agent, which emits
+// tool_execution_start even for skipped / unknown calls; observers in
+// pi-agent-go can rely on EventToolStart implying a real Handler ran.
 type EventToolStart struct {
 	ToolCallID string
 	Name       string

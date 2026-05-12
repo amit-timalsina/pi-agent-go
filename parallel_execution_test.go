@@ -599,6 +599,106 @@ func TestParallel_DefaultIsSequential(t *testing.T) {
 	}
 }
 
+// TestParallel_OuterCtxCancellationUnwindsHandlers verifies that
+// cancelling the ctx passed to Run propagates into in-flight Handler
+// goroutines under parallel mode. Without proper ctx propagation,
+// slow handlers would keep running after the consumer cancelled.
+func TestParallel_OuterCtxCancellationUnwindsHandlers(t *testing.T) {
+	// Three slow handlers; we cancel after they've started.
+	tools := []agent.AgentTool{
+		sleepyTool("a", 500*time.Millisecond, "ra"),
+		sleepyTool("b", 500*time.Millisecond, "rb"),
+		sleepyTool("c", 500*time.Millisecond, "rc"),
+	}
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			multiToolCallScript(
+				struct{ ID, Name, Args string }{"1", "a", `{}`},
+				struct{ ID, Name, Args string }{"2", "b", `{}`},
+				struct{ ID, Name, Args string }{"3", "c", `{}`},
+			),
+			textOnlyScript("never reached"),
+		},
+	}
+	a, _ := agent.New(agent.Config{
+		LLM:           fake,
+		Model:         "test",
+		Tools:         tools,
+		ToolExecution: agent.ToolExecutionParallel,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel shortly after the run starts — handlers should observe
+	// ctx.Done() via sleepyTool's select and bail with ctx.Err().
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	started := time.Now()
+	_, err := collect(t, a.Run(ctx, "go"))
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Errorf("expected run to terminate with an error after ctx cancel; got nil")
+	}
+	// Sanity: total wall time should be a fraction of 500ms (not 3x).
+	// Generous bound to avoid CI flakes; the test mainly proves that we
+	// don't wait the full 500ms of any handler after cancellation.
+	if elapsed > 400*time.Millisecond {
+		t.Errorf("run took %v after ctx cancel; want < 400ms (handlers did not unwind)", elapsed)
+	}
+}
+
+// TestParallel_ConsumerAbortCancelsInFlightHandlers verifies the
+// must-fix-1 contract: when the iter consumer breaks out of the range
+// mid-batch (yield returns false), the loop cancels its internal ctx
+// so in-flight handlers honoring ctx.Done() bail out promptly. Without
+// the explicit context.WithCancel inside executeToolCallsParallel,
+// this test would block until the slow handler completed naturally.
+func TestParallel_ConsumerAbortCancelsInFlightHandlers(t *testing.T) {
+	tools := []agent.AgentTool{
+		sleepyTool("a", 1*time.Millisecond, "ra"),   // finishes first
+		sleepyTool("b", 500*time.Millisecond, "rb"), // slow; should be cancelled
+		sleepyTool("c", 500*time.Millisecond, "rc"), // slow; should be cancelled
+	}
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			multiToolCallScript(
+				struct{ ID, Name, Args string }{"1", "a", `{}`},
+				struct{ ID, Name, Args string }{"2", "b", `{}`},
+				struct{ ID, Name, Args string }{"3", "c", `{}`},
+			),
+			textOnlyScript("never reached"),
+		},
+	}
+	a, _ := agent.New(agent.Config{
+		LLM:           fake,
+		Model:         "test",
+		Tools:         tools,
+		ToolExecution: agent.ToolExecutionParallel,
+	})
+
+	// Consume events; break out of the iter as soon as we see the
+	// first EventToolEnd (which will be the fastest handler "a").
+	started := time.Now()
+	for ev, err := range a.Run(context.Background(), "go") {
+		if err != nil {
+			t.Fatalf("unexpected error before abort: %v", err)
+		}
+		if _, ok := ev.(agent.EventToolEnd); ok {
+			break // simulate consumer abort
+		}
+	}
+	elapsed := time.Since(started)
+
+	// If the abort properly cancelled the in-flight handlers, total
+	// elapsed should be well under the 500ms of the slowest handler.
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("consumer abort took %v to return; want < 300ms (in-flight handlers did not unwind)", elapsed)
+	}
+}
+
 // errorMessageContains is a small helper that doesn't depend on
 // strings.Contains being imported in this test file already.
 func errorMessageContains(err error, s string) bool {
