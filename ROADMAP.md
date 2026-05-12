@@ -7,6 +7,9 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v0.3.0** shipped 2026-05-12 — parallel tool execution
+  (`Config.ToolExecution = ToolExecutionParallel`, per-tool opt-out,
+  source-order tool_result, finish-order EventToolEnd).
 - **v0.2.0** shipped 2026-05-11 — FullPayloadHint + TransformContext +
   SetSystemPrompt (WWMD convergence).
 - **v1.0 ETA:** unknown. v1.0 requires ≥4 weeks production use without
@@ -14,14 +17,6 @@ Reordering happens when reality changes.
   real workload.
 
 ## Near-term (next 1–3 minor releases)
-
-### v0.3.0 — parallel tool execution
-
-- `Config.ToolExecution` enum (`Sequential` default, `Parallel` opt-in).
-- Implementation: `errgroup.Group` with results reassembled in source
-  order so the wire-level tool_result blocks remain stable.
-- Mario ships parallel as the default; we chose sequential at v1 to
-  keep the loop simple. Time to add the opt-in.
 
 ### v0.4.0 — observability example + run-correlation helper
 
@@ -93,7 +88,8 @@ Reordering happens when reality changes.
 
 ## v1.0 readiness checklist
 
-- [ ] Parallel tool execution shipped + production-tested.
+- [x] Parallel tool execution shipped (v0.3.0); awaiting production
+      validation under load.
 - [ ] Snapshot resume working end-to-end.
 - [ ] `examples/observability/` shipped and referenced from the README.
 - [ ] At least one external Go consumer driving the loop in a real

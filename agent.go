@@ -37,6 +37,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	llm "github.com/amit-timalsina/pi-llm-go"
 )
 
@@ -61,6 +63,44 @@ var (
 	// The underlying error is wrapped; use errors.Unwrap or errors.As to
 	// inspect.
 	ErrTransformContext = errors.New("agent: TransformContext failed")
+)
+
+// ToolExecutionMode controls whether the tool calls inside one
+// assistant turn run one-at-a-time or concurrently. Applies at the
+// Config level (default for all tools in the batch) and per-AgentTool
+// (an opt-out override for tools that aren't safe to run in parallel).
+type ToolExecutionMode int
+
+const (
+	// ToolExecutionUnspecified is the zero value. On Config, it falls
+	// back to ToolExecutionSequential. On AgentTool, it inherits the
+	// effective Config setting.
+	ToolExecutionUnspecified ToolExecutionMode = iota
+
+	// ToolExecutionSequential runs tool calls one at a time in source
+	// order. Hooks see exactly one in-flight call at any moment. This
+	// is the default to preserve v0.2.x behavior.
+	ToolExecutionSequential
+
+	// ToolExecutionParallel runs Handler invocations concurrently. The
+	// pre-flight phase (BeforeToolCall hook + EventToolStart emission)
+	// stays sequential in source order; only the Handler + AfterToolCall
+	// hook run in goroutines. The tool_result message and ToolLog
+	// entries are reassembled in source order so the wire transcript
+	// is stable. EventToolEnd events fire as handlers complete
+	// (finish order), not source order — observers that need source
+	// ordering can sort by ToolCallID or read from Snapshot().ToolLog.
+	//
+	// Hook authors are responsible for thread-safety under
+	// ToolExecutionParallel: BeforeToolCall + AfterToolCall may be
+	// invoked concurrently from multiple goroutines. Protect any
+	// shared state externally.
+	//
+	// If any AgentTool in the batch declares ExecutionMode ==
+	// ToolExecutionSequential, the entire batch falls back to
+	// sequential execution — a safety valve for tool authors who
+	// know their handler can't run beside others.
+	ToolExecutionParallel
 )
 
 // Config configures a new Agent.
@@ -92,6 +132,11 @@ type Config struct {
 	// length, applied to any AgentTool that doesn't set its own
 	// MaxSummarySize. 0 falls back to DefaultMaxSummarySize (32 KiB).
 	DefaultMaxSummarySize int
+
+	// ToolExecution selects how tool calls inside one assistant turn
+	// run. Defaults to ToolExecutionSequential. See ToolExecutionMode
+	// godoc for the full contract.
+	ToolExecution ToolExecutionMode
 
 	// TransformContext, when non-nil, is called at the top of every
 	// iteration with a copy of the current transcript just before the LLM
@@ -434,108 +479,148 @@ func (a *Agent) runIteration(
 	return msg, true
 }
 
-// executeToolCalls runs each tool call in order (sequential at v1),
-// invoking BeforeToolCall and AfterToolCall hooks around each Handler.
-// Returns the per-call ToolResultBlocks (one entry per tool call, in
-// source order) and a continue flag.
+// executeToolCalls dispatches the batch to sequential or parallel
+// execution based on Config.ToolExecution and any per-tool ExecutionMode
+// override. Returns the per-call ToolResultBlocks (one entry per tool
+// call, in SOURCE order regardless of execution mode) and a continue
+// flag.
 func (a *Agent) executeToolCalls(
 	ctx context.Context,
 	iteration int,
 	calls []llm.ToolCallBlock,
 	yield func(AgentEvent, error) bool,
 ) ([]llm.Block, bool) {
-	results := make([]llm.Block, 0, len(calls))
-	for _, call := range calls {
-		info := ToolCallInfo{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Arguments:  call.Arguments,
-		}
-		rc := a.runContextLocked(iteration)
+	if a.shouldRunParallel(calls) {
+		return a.executeToolCallsParallel(ctx, iteration, calls, yield)
+	}
+	return a.executeToolCallsSequential(ctx, iteration, calls, yield)
+}
 
-		// BeforeToolCall hook — may skip execution.
-		skip := false
-		errorResult := ""
-		if a.cfg.BeforeToolCall != nil {
-			s, er, err := a.cfg.BeforeToolCall(ctx, rc, info)
-			if err != nil {
-				yield(nil, fmt.Errorf("BeforeToolCall: %w", err))
-				return nil, false
-			}
-			skip = s
-			errorResult = er
+// shouldRunParallel reports whether the batch is eligible for parallel
+// execution: the agent must be configured Parallel AND no tool in the
+// batch may declare ExecutionMode == Sequential. Matches Mario's
+// pi-agent semantics — a single sequential tool drags the whole batch
+// down to sequential.
+func (a *Agent) shouldRunParallel(calls []llm.ToolCallBlock) bool {
+	if a.cfg.ToolExecution != ToolExecutionParallel {
+		return false
+	}
+	if len(calls) <= 1 {
+		// One tool call can't benefit from parallel; the sequential
+		// path is cheaper (no goroutine + channel).
+		return false
+	}
+	for _, c := range calls {
+		if t, ok := a.tools[c.Name]; ok && t.ExecutionMode == ToolExecutionSequential {
+			return false
 		}
+	}
+	return true
+}
 
-		var result Result
-		isError := false
-		startedAt := time.Now()
+// toolOutcome is the bundle of state we collect for one tool call —
+// works for both sequential and parallel paths. resultBlock is what
+// gets appended to the wire-level tool_result message; logEntry feeds
+// the audit ToolLog; endEvent is the EventToolEnd we yield.
+type toolOutcome struct {
+	resultBlock llm.ToolResultBlock
+	logEntry    ToolLogEntry
+	endEvent    EventToolEnd
+}
 
-		// Effective per-tool budget. Resolved here so the same value
-		// applies to the handler's result AND to AfterToolCall overrides
-		// — a hook that doubles the summary length without realizing it
-		// would otherwise sneak past the budget.
-		tool, toolFound := a.tools[info.Name]
-		maxSize := a.cfg.DefaultMaxSummarySize
-		if toolFound && tool.MaxSummarySize > 0 {
-			maxSize = tool.MaxSummarySize
+// executeOneToolCall runs the Handler + budget enforcement + AfterToolCall
+// hook for a single pre-flighted tool call. Pre-flight (BeforeToolCall +
+// EventToolStart emission) is the caller's responsibility — this function
+// is invoked once the loop has decided the call should proceed.
+//
+// Safe to call from multiple goroutines under ToolExecutionParallel:
+// reads only immutable closure data (cfg, tools map) and produces a
+// fully-owned toolOutcome. The caller serializes writes to a.toolLog
+// and yields of the resulting end event.
+func (a *Agent) executeOneToolCall(
+	ctx context.Context,
+	iteration int,
+	call llm.ToolCallBlock,
+	info ToolCallInfo,
+	rc RunContext,
+	tool AgentTool,
+	toolFound bool,
+	skip bool,
+	skipMsg string,
+) (toolOutcome, error) {
+	startedAt := time.Now()
+
+	// Effective per-tool budget. Resolved here so the same value
+	// applies to the handler's result AND to AfterToolCall overrides
+	// — a hook that doubles the summary length without realizing it
+	// would otherwise sneak past the budget.
+	maxSize := a.cfg.DefaultMaxSummarySize
+	if toolFound && tool.MaxSummarySize > 0 {
+		maxSize = tool.MaxSummarySize
+	}
+	if maxSize <= 0 {
+		maxSize = DefaultMaxSummarySize
+	}
+
+	var result Result
+	isError := false
+
+	switch {
+	case skip:
+		msg := skipMsg
+		if msg == "" {
+			msg = defaultBlockedMessage
 		}
-		if maxSize <= 0 {
-			maxSize = DefaultMaxSummarySize
-		}
-
-		if skip {
-			if errorResult == "" {
-				errorResult = defaultBlockedMessage
-			}
-			result = Result{Summary: errorResult}
-			isError = true
-		} else if !toolFound {
-			result = Result{Summary: defaultUnknownToolMessage + ": " + info.Name}
+		result = Result{Summary: msg}
+		isError = true
+	case !toolFound:
+		result = Result{Summary: defaultUnknownToolMessage + ": " + info.Name}
+		isError = true
+	default:
+		r, err := tool.Handler(ctx, info.Arguments)
+		if err != nil {
+			result = Result{Summary: err.Error()}
 			isError = true
 		} else {
-			if !yield(EventToolStart{ToolCallID: call.ID, Name: call.Name, Arguments: call.Arguments}, nil) {
-				return nil, false
-			}
-			r, err := tool.Handler(ctx, info.Arguments)
-			if err != nil {
-				result = Result{Summary: err.Error()}
-				isError = true
-			} else {
-				result = r
-			}
+			result = r
 		}
+	}
 
-		// AfterToolCall hook — may override the result.
-		if a.cfg.AfterToolCall != nil {
-			override, err := a.cfg.AfterToolCall(ctx, rc, info, result, isError)
-			if err != nil {
-				yield(nil, fmt.Errorf("AfterToolCall: %w", err))
-				return nil, false
-			}
-			if override != nil {
-				result = *override
-			}
+	// AfterToolCall hook — may override the result. Returning a hook
+	// error aborts the run (caller surfaces the error via yield).
+	if a.cfg.AfterToolCall != nil {
+		override, err := a.cfg.AfterToolCall(ctx, rc, info, result, isError)
+		if err != nil {
+			return toolOutcome{}, fmt.Errorf("AfterToolCall: %w", err)
 		}
-
-		// Budget enforcement. The tool author's bug if violated; we
-		// don't abort the run, we replace the result with a clear error
-		// so the model sees the violation and the tool author sees it
-		// in tests / event logs.
-		effective := result.effectiveSummary()
-		if len(effective) > maxSize {
-			result = Result{
-				Summary: fmt.Sprintf("tool %q returned a summary of %d bytes; max is %d. Bug in the tool's summary budgeting; surface large outputs via FullPayloadHint instead.",
-					info.Name, len(effective), maxSize),
-				FullPayloadHint: result.FullPayloadHint,
-			}
-			isError = true
-			effective = result.Summary
+		if override != nil {
+			result = *override
 		}
+	}
 
-		endedAt := time.Now()
+	// Budget enforcement. The tool author's bug if violated; we don't
+	// abort the run, we replace the result with a clear error so the
+	// model sees the violation and the tool author sees it in tests /
+	// event logs.
+	effective := result.effectiveSummary()
+	if len(effective) > maxSize {
+		result = Result{
+			Summary: fmt.Sprintf("tool %q returned a summary of %d bytes; max is %d. Bug in the tool's summary budgeting; surface large outputs via FullPayloadHint instead.",
+				info.Name, len(effective), maxSize),
+			FullPayloadHint: result.FullPayloadHint,
+		}
+		isError = true
+		effective = result.Summary
+	}
 
-		a.mu.Lock()
-		a.toolLog = append(a.toolLog, ToolLogEntry{
+	endedAt := time.Now()
+	return toolOutcome{
+		resultBlock: llm.ToolResultBlock{
+			ToolCallID: call.ID,
+			Content:    effective,
+			IsError:    isError,
+		},
+		logEntry: ToolLogEntry{
 			Iteration:       iteration,
 			ToolCallID:      call.ID,
 			Name:            call.Name,
@@ -545,24 +630,254 @@ func (a *Agent) executeToolCalls(
 			IsError:         isError,
 			StartedAt:       startedAt,
 			EndedAt:         endedAt,
-		})
-		a.mu.Unlock()
-
-		results = append(results, llm.ToolResultBlock{
-			ToolCallID: call.ID,
-			Content:    effective,
-			IsError:    isError,
-		})
-
-		if !yield(EventToolEnd{
+		},
+		endEvent: EventToolEnd{
 			ToolCallID:      call.ID,
 			Name:            call.Name,
 			Result:          effective,
 			IsError:         isError,
 			FullPayloadHint: result.FullPayloadHint,
-		}, nil) {
+		},
+	}, nil
+}
+
+// preflight runs the BeforeToolCall hook (if any), resolves the tool
+// from the registry, and returns the inputs executeOneToolCall needs.
+// Sequential in both execution modes — Mario's design preserves the
+// "hook sees calls in source order" guarantee even under parallel.
+type preflightResult struct {
+	info      ToolCallInfo
+	rc        RunContext
+	tool      AgentTool
+	toolFound bool
+	skip      bool
+	skipMsg   string
+	emitStart bool // false when the call was skipped or unknown — no Handler will run
+}
+
+func (a *Agent) preflight(ctx context.Context, iteration int, call llm.ToolCallBlock) (preflightResult, error) {
+	info := ToolCallInfo{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Arguments:  call.Arguments,
+	}
+	rc := a.runContextLocked(iteration)
+
+	skip := false
+	skipMsg := ""
+	if a.cfg.BeforeToolCall != nil {
+		s, er, err := a.cfg.BeforeToolCall(ctx, rc, info)
+		if err != nil {
+			return preflightResult{}, fmt.Errorf("BeforeToolCall: %w", err)
+		}
+		skip = s
+		skipMsg = er
+	}
+
+	tool, toolFound := a.tools[info.Name]
+	emitStart := !skip && toolFound
+	return preflightResult{
+		info:      info,
+		rc:        rc,
+		tool:      tool,
+		toolFound: toolFound,
+		skip:      skip,
+		skipMsg:   skipMsg,
+		emitStart: emitStart,
+	}, nil
+}
+
+// executeToolCallsSequential runs tool calls one-after-another in
+// source order. This is the v0.2.x behavior; it remains the default
+// and the fallback when Config.ToolExecution is Sequential or when any
+// AgentTool in the batch declared ExecutionMode = Sequential.
+func (a *Agent) executeToolCallsSequential(
+	ctx context.Context,
+	iteration int,
+	calls []llm.ToolCallBlock,
+	yield func(AgentEvent, error) bool,
+) ([]llm.Block, bool) {
+	results := make([]llm.Block, 0, len(calls))
+	for _, call := range calls {
+		pre, err := a.preflight(ctx, iteration, call)
+		if err != nil {
+			yield(nil, err)
 			return nil, false
 		}
+		if pre.emitStart {
+			if !yield(EventToolStart{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Arguments:  call.Arguments,
+			}, nil) {
+				return nil, false
+			}
+		}
+		outcome, err := a.executeOneToolCall(ctx, iteration, call, pre.info, pre.rc, pre.tool, pre.toolFound, pre.skip, pre.skipMsg)
+		if err != nil {
+			yield(nil, err)
+			return nil, false
+		}
+		a.mu.Lock()
+		a.toolLog = append(a.toolLog, outcome.logEntry)
+		a.mu.Unlock()
+		results = append(results, outcome.resultBlock)
+		if !yield(outcome.endEvent, nil) {
+			return nil, false
+		}
+	}
+	return results, true
+}
+
+// executeToolCallsParallel runs Handler + AfterToolCall concurrently
+// while keeping pre-flight (BeforeToolCall + EventToolStart) sequential
+// in source order. tool_result blocks + ToolLog entries land in source
+// order on the wire; EventToolEnd events fire as Handlers complete
+// (finish order). Hook authors must protect any shared state across
+// concurrent goroutines.
+func (a *Agent) executeToolCallsParallel(
+	ctx context.Context,
+	iteration int,
+	calls []llm.ToolCallBlock,
+	yield func(AgentEvent, error) bool,
+) ([]llm.Block, bool) {
+	// Phase 1 (sequential): run BeforeToolCall for each call, emit
+	// EventToolStart events, classify each call as immediate (skip /
+	// unknown tool — no Handler) or async (Handler to fire in Phase 2).
+	type slot struct {
+		call      llm.ToolCallBlock
+		pre       preflightResult
+		immediate *toolOutcome // non-nil when no Handler will fire (skip / unknown)
+	}
+	slots := make([]slot, len(calls))
+	for i, call := range calls {
+		pre, err := a.preflight(ctx, iteration, call)
+		if err != nil {
+			yield(nil, err)
+			return nil, false
+		}
+		s := slot{call: call, pre: pre}
+		if pre.emitStart {
+			if !yield(EventToolStart{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Arguments:  call.Arguments,
+			}, nil) {
+				return nil, false
+			}
+		} else {
+			// Skip / unknown — produce the outcome synchronously now so
+			// Phase 2 can drain it through the same channel ordering as
+			// real Handler runs.
+			outcome, err := a.executeOneToolCall(ctx, iteration, call, pre.info, pre.rc, pre.tool, pre.toolFound, pre.skip, pre.skipMsg)
+			if err != nil {
+				yield(nil, err)
+				return nil, false
+			}
+			s.immediate = &outcome
+		}
+		slots[i] = s
+	}
+
+	// Phase 2 (parallel): fire Handlers + AfterToolCall in goroutines
+	// for the async slots; pipe outcomes (and their source index) over
+	// a buffered channel. Buffered to len(calls) so no goroutine ever
+	// blocks on send — every slot produces exactly one outcome.
+	type finished struct {
+		idx     int
+		outcome toolOutcome
+	}
+	done := make(chan finished, len(calls))
+	g, gctx := errgroup.WithContext(ctx)
+	for i := range slots {
+		i := i
+		if slots[i].immediate != nil {
+			done <- finished{idx: i, outcome: *slots[i].immediate}
+			continue
+		}
+		s := slots[i]
+		g.Go(func() error {
+			outcome, err := a.executeOneToolCall(gctx, iteration, s.call, s.pre.info, s.pre.rc, s.pre.tool, s.pre.toolFound, s.pre.skip, s.pre.skipMsg)
+			if err != nil {
+				// Returning err cancels gctx; other handlers see the
+				// cancellation. Caller surfaces the error after Wait().
+				return err
+			}
+			done <- finished{idx: i, outcome: outcome}
+			return nil
+		})
+	}
+
+	// Drain finished outcomes in FINISH ORDER while goroutines run.
+	// Closing `done` only after Wait() returns lets us know when every
+	// goroutine has reported (or errored).
+	var (
+		waitErr  error
+		waitDone = make(chan struct{})
+	)
+	go func() {
+		waitErr = g.Wait()
+		close(waitDone)
+	}()
+
+	outcomes := make([]toolOutcome, len(calls))
+	gotResult := make([]bool, len(calls))
+	pending := len(calls)
+	for pending > 0 {
+		select {
+		case f := <-done:
+			outcomes[f.idx] = f.outcome
+			gotResult[f.idx] = true
+			pending--
+			if !yield(f.outcome.endEvent, nil) {
+				// Consumer aborted. Cancel via shared ctx (done by
+				// errgroup when gctx is cancelled — but errgroup only
+				// cancels gctx on Wait's first non-nil return, not on
+				// consumer abort). Wait for goroutines to settle so
+				// they don't outlive the run.
+				//
+				// We can't easily cancel gctx here without owning the
+				// CancelFunc; relying on consumer to cancel ctx for
+				// real shutdown. For test purposes, we still wait for
+				// in-flight handlers.
+				<-waitDone
+				return nil, false
+			}
+		case <-waitDone:
+			// All goroutines have returned. If g.Wait errored before
+			// every outcome made it onto the channel, drain whatever
+			// arrived and bail.
+			if waitErr != nil {
+				yield(nil, waitErr)
+				return nil, false
+			}
+			// Otherwise the channel must have buffered the remaining
+			// outcomes (every g.Go that returned nil sent before
+			// returning). Fall through to drain them via select again.
+		}
+	}
+	<-waitDone
+	if waitErr != nil {
+		yield(nil, waitErr)
+		return nil, false
+	}
+
+	// Phase 3 (sequential): assemble tool_result blocks and ToolLog
+	// entries in SOURCE order, regardless of finish order.
+	a.mu.Lock()
+	for i := range outcomes {
+		if !gotResult[i] {
+			a.mu.Unlock()
+			yield(nil, fmt.Errorf("agent: parallel tool execution did not produce outcome for call %d", i))
+			return nil, false
+		}
+		a.toolLog = append(a.toolLog, outcomes[i].logEntry)
+	}
+	a.mu.Unlock()
+
+	results := make([]llm.Block, 0, len(calls))
+	for i := range outcomes {
+		results = append(results, outcomes[i].resultBlock)
 	}
 	return results, true
 }

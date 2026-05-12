@@ -89,6 +89,18 @@ type AgentTool struct {
 	// agent loop enforces this at execution time and surfaces an error
 	// if the tool's Summary exceeds it.
 	MaxSummarySize int
+
+	// ExecutionMode opts THIS tool out of parallel execution. The
+	// default (ToolExecutionUnspecified) inherits the effective
+	// Config.ToolExecution setting. Set ToolExecutionSequential to
+	// force the entire batch sequential whenever this tool is called
+	// — a safety valve for handlers that aren't thread-safe with
+	// themselves or with other handlers in the registry. Setting
+	// ToolExecutionParallel here is allowed but redundant unless you
+	// want to override a Sequential default (which has no current
+	// effect — the loop always defers to Config when this tool is
+	// non-Sequential).
+	ExecutionMode ToolExecutionMode
 }
 
 // Raw constructs an AgentTool from a hand-written JSON Schema and a
