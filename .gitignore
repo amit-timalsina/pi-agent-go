@@ -9,6 +9,7 @@
 /with_hooks
 /hello_agent
 /bounded_results
+/observability
 
 # Coverage / profiling output.
 /coverage.out

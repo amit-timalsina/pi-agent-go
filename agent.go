@@ -256,6 +256,13 @@ func (a *Agent) RunMessage(ctx context.Context, userMsg llm.Message) iter.Seq2[A
 		a.messages = append(a.messages, userMsg)
 		a.mu.Unlock()
 
+		// Decorate ctx with the active RunID so every downstream call
+		// (BeforeToolCall, AfterToolCall, OnSteering, TransformContext,
+		// tool Handler) can read it via agent.RunIDFromContext. Used for
+		// span correlation in observability code that doesn't want to
+		// thread the id through tool arguments.
+		ctx = WithRunID(ctx, runID)
+
 		if !yield(EventRunStart{RunID: runID}, nil) {
 			return
 		}

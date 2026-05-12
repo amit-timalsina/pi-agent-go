@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `agent.RunIDFromContext(ctx) string` — extracts the active RunID
+  from a ctx the agent loop passed into a hook or tool Handler. The
+  intended use is span correlation: a tool Handler can attach its
+  own OpenTelemetry span as a child of the run-level span without
+  having to thread the RunID through tool arguments. Returns `""`
+  cleanly when the ctx didn't come from an agent loop.
+- `agent.WithRunID(ctx, runID) context.Context` — the inverse helper.
+  Normally callers don't need it (the loop decorates ctx
+  automatically inside `RunMessage`), but it's exported for test
+  scaffolding and for consumers building higher-level RunContext-
+  aware infrastructure on top of pi-agent-go. Empty `runID` returns
+  the input ctx unchanged.
+- Hooks (BeforeToolCall / AfterToolCall / OnSteering),
+  TransformContext, and tool Handlers all now receive a ctx
+  pre-decorated with the active RunID. No API change to the hook
+  signatures.
+- New `examples/observability` — reference wiring for structured
+  logging (stdlib `log/slog`) over the AgentEvent iterator and the
+  three hooks. Marker comments call out where OpenTelemetry spans
+  attach if you want to add a tracer. Zero new framework deps —
+  observability stays first-class but external.
+
 ## [0.3.0] - 2026-05-12
 
 Opt-in parallel tool execution. WWMD-aligned with Mario Zechner's

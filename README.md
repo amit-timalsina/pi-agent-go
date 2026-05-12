@@ -110,6 +110,34 @@ agent.Steer(ctx, llm.Message{
 
 The steering message is appended to the transcript before the next LLM call, between iterations. Steering does not interrupt the current LLM call mid-stream — that semantic is reserved for a future major version.
 
+## Observability
+
+Observability is first-class but external: the `AgentEvent` iterator IS the
+event stream, the three hooks expose pre/post-tool state, and `Snapshot()`
+gives a coherent post-run dump. Zero framework deps; wire your tracer of
+choice on top.
+
+`agent.RunIDFromContext(ctx) string` lets a tool handler attach its own
+spans as children of the run-level span without threading the RunID
+through tool arguments:
+
+```go
+func myHandler(ctx context.Context, args json.RawMessage) (agent.Result, error) {
+    runID := agent.RunIDFromContext(ctx)
+    ctx, span := tracer.Start(ctx, "my_tool",
+        trace.WithAttributes(attribute.String("pi.run_id", runID)))
+    defer span.End()
+    // ... do work ...
+}
+```
+
+The agent loop decorates ctx with the active RunID before invoking any
+hook or Handler — the same ID you see on `EventRunStart.RunID` and
+`Snapshot().RunID`. See [`examples/observability`](examples/observability)
+for a complete reference wiring `log/slog` over the event iterator + the
+three hooks, with marker comments showing where OpenTelemetry spans
+attach.
+
 ## Example
 
 `examples/hello_agent` is a runnable demo against the real Anthropic API:

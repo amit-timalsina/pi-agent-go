@@ -7,6 +7,11 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v0.4.0** landing — observability example (slog wiring over the
+  AgentEvent iterator + the three hooks) + `RunIDFromContext` /
+  `WithRunID` helpers for span correlation from tool handlers. No
+  framework deps; observability stays first-class but external. Tag
+  stamped on merge.
 - **v0.3.0** shipped 2026-05-12 — parallel tool execution
   (`Config.ToolExecution = ToolExecutionParallel`, per-tool opt-out,
   source-order tool_result, finish-order EventToolEnd). Bumps Go floor
@@ -19,27 +24,16 @@ Reordering happens when reality changes.
 
 ## Near-term (next 1–3 minor releases)
 
-### v0.4.0 — observability example + run-correlation helper
-
-- `examples/observability/` — wires OpenTelemetry spans (run → iter →
-  tool) and `slog` structured logs via the three hooks and the
-  `AgentEvent` iterator. Zero new framework deps; the events ARE the
-  observer surface. Consumer copies and tweaks for their stack.
-- New `agent.RunIDFromContext(ctx) string` helper — the agent
-  decorates every tool-handler context with the active RunID so
-  handlers can correlate their own spans with the parent run without
-  threading the ID through tool arguments. Small framework change,
-  big telemetry ergonomics win.
-- A first-party `Observer` interface or `pi-agent-go/otel` sub-package
-  is **deferred** until the example pattern proves insufficient.
-
-### v0.5.0 — snapshot resume
+### v0.5.0 — snapshot resume + persistence interface
 
 - `agent.Restore(cfg Config, snap RunSnapshot) (*Agent, error)` —
   reconstruct an Agent from a prior `Snapshot()`. Today `Snapshot` is
   observability-only; you can't pick up where a run left off.
 - Required for: long-running agents that survive process restarts;
   audit / replay workflows; cheaper recovery after failures.
+- Pluggable `TranscriptStore` interface that the agent writes to on
+  every state mutation; default in-memory matches today's behavior.
+  Pairs naturally with Restore.
 
 ### v0.6.0 — streaming tool results
 
@@ -70,9 +64,6 @@ Reordering happens when reality changes.
 - **Tool-result caching**: agent-level cache keyed on `(name, args)`
   for deterministic tools, opt-in via `AgentTool.CacheKey()`. Saves
   LLM-time on replay. Not in Mario; user-requested.
-- **Persistence interface**: pluggable `TranscriptStore` that the agent
-  writes to on every state mutation; pairs naturally with v0.5.0
-  Restore. Default in-memory matches today's behavior.
 
 ## Out of scope (intentionally)
 
