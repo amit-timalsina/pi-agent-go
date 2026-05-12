@@ -138,6 +138,37 @@ for a complete reference wiring `log/slog` over the event iterator + the
 three hooks, with marker comments showing where OpenTelemetry spans
 attach.
 
+## Snapshot resume
+
+`Snapshot()` already gives a coherent post-run dump; `Restore(cfg, snap)`
+brings the dual back — reconstruct an Agent from a prior snapshot so a
+long-running agent can survive process restarts.
+
+```go
+snap := agent.Snapshot()             // persist however you want
+
+// ... process restart ...
+
+restored, err := agent.Restore(agent.Config{
+    LLM:   newProvider,
+    Model: snap.Model, // or your config default
+}, snap)
+// restored is ready to receive Run / RunMessage; the prior transcript,
+// ToolLog, system prompt, and last usage are preserved. Next Run
+// generates a fresh RunID.
+```
+
+Constraints: `snap.IsRunning=true` is rejected (can't resume a run that
+was streaming mid-LLM-call); steering channel contents are not
+preserved (re-inject any pending steering after restore); cfg goes
+through the same validation as `New()`.
+
+Serialization of `RunSnapshot` is left to the caller — `gob` works
+out-of-the-box on the interface-typed `llm.Block` slice, while native
+JSON support lands in a future pi-llm-go release. See
+[`examples/snapshot_resume`](examples/snapshot_resume) for the
+end-to-end pattern.
+
 ## Example
 
 `examples/hello_agent` is a runnable demo against the real Anthropic API:

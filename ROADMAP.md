@@ -7,6 +7,11 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v0.5.0** landing — `agent.Restore(cfg, snap)` for snapshot-based
+  resume so long-running agents survive process restarts. Pluggable
+  `TranscriptStore` interface deferred to a later release pending
+  concrete consumer demand; callers wire their own storage on top of
+  `Snapshot()` + `Restore()`. Tag stamped on merge.
 - **v0.4.0** shipped 2026-05-12 — observability example (slog wiring
   over the AgentEvent iterator + the three hooks) + `RunIDFromContext`
   / `WithRunID` helpers for span correlation from tool handlers. No
@@ -22,17 +27,6 @@ Reordering happens when reality changes.
   real workload.
 
 ## Near-term (next 1–3 minor releases)
-
-### v0.5.0 — snapshot resume + persistence interface
-
-- `agent.Restore(cfg Config, snap RunSnapshot) (*Agent, error)` —
-  reconstruct an Agent from a prior `Snapshot()`. Today `Snapshot` is
-  observability-only; you can't pick up where a run left off.
-- Required for: long-running agents that survive process restarts;
-  audit / replay workflows; cheaper recovery after failures.
-- Pluggable `TranscriptStore` interface that the agent writes to on
-  every state mutation; default in-memory matches today's behavior.
-  Pairs naturally with Restore.
 
 ### v0.6.0 — streaming tool results
 
