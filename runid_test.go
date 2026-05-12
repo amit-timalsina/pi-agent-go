@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	agent "github.com/amit-timalsina/pi-agent-go"
@@ -156,9 +157,83 @@ func TestRunIDFromContext_AvailableInAllHooks(t *testing.T) {
 	}
 	for hookName, got := range cases {
 		if got == "" {
-			t.Errorf("%s saw empty RunID; want %q", hookName, runStartID)
+			// OnSteering is the most fragile of the four: it only
+			// fires if drainSteering pulls the steering message off
+			// the buffered channel before iteration 1 starts. If
+			// that pre-flight drain ever moves (e.g. a future
+			// refactor sequences steering AFTER the first LLM call),
+			// this test silently passes the OnSteering check by
+			// never invoking the hook. Spell out the diagnostic so
+			// the failure mode is unambiguous.
+			t.Errorf("%s saw empty RunID; want %q (was the hook invoked at all? check steering drain ordering if hookName=OnSteering)",
+				hookName, runStartID)
 		} else if got != runStartID {
 			t.Errorf("%s RunID=%q != EventRunStart.RunID=%q", hookName, got, runStartID)
+		}
+	}
+}
+
+// TestRunIDFromContext_AvailableInParallelHandlers verifies the ctx
+// decoration survives the errgroup + context.WithCancel chain used
+// by executeToolCallsParallel — a regression guard against any
+// future refactor that derives the parallel ctx from
+// context.Background() instead of the loop's decorated ctx.
+func TestRunIDFromContext_AvailableInParallelHandlers(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		observed = map[string]string{} // call_id -> RunID seen
+	)
+	makeTool := func(name string) agent.AgentTool {
+		return agent.Raw(
+			name,
+			"records the RunID it sees",
+			json.RawMessage(`{"type":"object"}`),
+			func(ctx context.Context, _ json.RawMessage) (agent.Result, error) {
+				mu.Lock()
+				observed[name] = agent.RunIDFromContext(ctx)
+				mu.Unlock()
+				return agent.Result{Summary: "ok"}, nil
+			},
+		)
+	}
+	tools := []agent.AgentTool{makeTool("a"), makeTool("b"), makeTool("c")}
+
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			multiToolCallScript(
+				struct{ ID, Name, Args string }{"1", "a", `{}`},
+				struct{ ID, Name, Args string }{"2", "b", `{}`},
+				struct{ ID, Name, Args string }{"3", "c", `{}`},
+			),
+			textOnlyScript("done"),
+		},
+	}
+	a, _ := agent.New(agent.Config{
+		LLM:           fake,
+		Model:         "test",
+		Tools:         tools,
+		ToolExecution: agent.ToolExecutionParallel,
+	})
+
+	var runStartID string
+	for ev, err := range a.Run(context.Background(), "go") {
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if e, ok := ev.(agent.EventRunStart); ok {
+			runStartID = e.RunID
+		}
+	}
+
+	if runStartID == "" {
+		t.Fatal("no EventRunStart observed")
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		got := observed[name]
+		if got == "" {
+			t.Errorf("parallel handler %q saw empty RunID; want %q (parallel ctx may have lost the WithRunID decoration)", name, runStartID)
+		} else if got != runStartID {
+			t.Errorf("parallel handler %q RunID=%q != EventRunStart.RunID=%q", name, got, runStartID)
 		}
 	}
 }
