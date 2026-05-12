@@ -6,6 +6,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `agent.Restore(cfg Config, snap RunSnapshot) (*Agent, error)` —
+  reconstructs an Agent from a prior `Snapshot()` so long-running
+  agents can survive process restarts. Preserves transcript, ToolLog,
+  system prompt (snap wins over cfg when non-empty), last usage,
+  and the prior RunID (metadata only — the next `Run` generates a
+  fresh ID).
+- Constraints: `snap.IsRunning=true` is rejected (can't resume mid-
+  flight); `cfg` goes through `New`-style validation; cfg tool
+  registry can differ from the original (adding / removing tools
+  is allowed).
+- Defensive copy semantics: mutating the snap's slices after Restore
+  does not affect the restored agent's state. Locked by
+  `TestRestore_DefensiveCopySliceMutationDoesntLeakBack`.
+- New `examples/snapshot_resume` — demonstrates the
+  Snapshot → Restore pattern end-to-end. Live-verified against the
+  Anthropic API: turn 1 ("capital of France?" → "Paris"); turn 2 on
+  the restored agent ("its population?" → "~2,161,000") proves the
+  prior transcript carries through.
+
+### Deferred (planned for v0.6.0 or later)
+
+- **`TranscriptStore` interface** for pluggable auto-persistence.
+  v0.5.0 ships the load-bearing Restore primitive; callers wire
+  their own storage (gob, custom JSON, S3, Postgres, etc.) on top
+  of `Snapshot()` + `Restore()`. Real-consumer-driven shape will
+  inform the interface design.
+- **Native JSON serialization** for `llm.Message.Content` — the
+  `llm.Block` interface needs a discriminated-union encoder in
+  pi-llm-go before `encoding/json` can round-trip a snapshot
+  unchanged. `gob` works today (register concrete block types).
+
 ## [0.4.0] - 2026-05-12
 
 Observability helpers + reference example. No API breakage — the
