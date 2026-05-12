@@ -277,6 +277,62 @@ func TestRestore_ZeroSnapEquivalentToNew(t *testing.T) {
 	}
 }
 
+// TestRestore_AllowsDifferentToolRegistry verifies the documented
+// contract that cfg.Tools MAY differ from what the original agent
+// registered. The transcript's historical tool calls are wire-format
+// metadata sent to the next-run model; they don't trigger any code,
+// so adding or removing tools across Restore is safe.
+func TestRestore_AllowsDifferentToolRegistry(t *testing.T) {
+	originalTool := agent.Raw(
+		"original_tool", "original",
+		json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
+			return agent.Result{Summary: "ran"}, nil
+		},
+	)
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			toolCallScript("call_1", "original_tool", `{}`),
+			textOnlyScript("done"),
+		},
+	}
+	original, _ := agent.New(agent.Config{LLM: fake, Model: "test", Tools: []agent.AgentTool{originalTool}})
+	if _, err := collect(t, original.Run(context.Background(), "go")); err != nil {
+		t.Fatalf("original run: %v", err)
+	}
+	snap := original.Snapshot()
+
+	// Restore with a COMPLETELY different tool set — the snap's
+	// transcript has a historical reference to "original_tool" but
+	// we don't register it on the restored agent. Restore must accept
+	// this since tool registration is for the next run's model, not
+	// for the historical transcript.
+	differentTool := agent.Raw(
+		"different_tool", "different",
+		json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (agent.Result, error) {
+			return agent.Result{Summary: "different"}, nil
+		},
+	)
+	restored, err := agent.Restore(agent.Config{
+		LLM:   &fakeLLM{},
+		Model: "test",
+		Tools: []agent.AgentTool{differentTool},
+	}, snap)
+	if err != nil {
+		t.Fatalf("Restore with different tool registry: %v", err)
+	}
+
+	// Verify the historical transcript survived intact.
+	rsnap := restored.Snapshot()
+	if len(rsnap.ToolLog) != len(snap.ToolLog) {
+		t.Errorf("ToolLog len=%d, want %d", len(rsnap.ToolLog), len(snap.ToolLog))
+	}
+	if len(rsnap.ToolLog) > 0 && rsnap.ToolLog[0].Name != "original_tool" {
+		t.Errorf("historical ToolLog entry overwritten: %q", rsnap.ToolLog[0].Name)
+	}
+}
+
 // TestRestore_DefensiveCopySliceMutationDoesntLeakBack verifies that
 // mutating the original snapshot's slices after Restore doesn't
 // affect the restored agent's state. Restore takes defensive copies.

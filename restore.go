@@ -1,10 +1,6 @@
 package agent
 
-import (
-	"errors"
-
-	llm "github.com/amit-timalsina/pi-llm-go"
-)
+import "errors"
 
 // Restore reconstructs an Agent from a prior Snapshot. The returned
 // Agent is ready to receive Run / RunMessage calls; the previous
@@ -77,9 +73,3 @@ func Restore(cfg Config, snap RunSnapshot) (*Agent, error) {
 	a.iteration = snap.Iteration
 	return a, nil
 }
-
-// Static assertion that llm.Message + ToolLogEntry are the only
-// non-trivial state Restore needs to thread through. If a new
-// load-bearing field gets added to RunSnapshot, this assertion's
-// absence will surface in the diff review.
-var _ = llm.Message{}
