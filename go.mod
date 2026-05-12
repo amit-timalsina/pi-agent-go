@@ -1,10 +1,11 @@
 module github.com/amit-timalsina/pi-agent-go
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/amit-timalsina/pi-llm-go v0.2.0
 	github.com/invopop/jsonschema v0.14.0
+	golang.org/x/sync v0.20.0
 )
 
 require (

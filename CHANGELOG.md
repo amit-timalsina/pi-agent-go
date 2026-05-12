@@ -6,6 +6,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `agent.ToolExecutionMode` enum (`ToolExecutionUnspecified`,
+  `ToolExecutionSequential`, `ToolExecutionParallel`) on `Config.ToolExecution`
+  and `AgentTool.ExecutionMode`. Default is sequential (preserves v0.2.x
+  behavior). Set `Config.ToolExecution = ToolExecutionParallel` to run
+  the Handler + AfterToolCall phases of a batch concurrently when the
+  model issues multiple tool calls in one assistant turn.
+- Two-phase contract, mirroring Mario Zechner's pi-agent:
+  - **Preflight (sequential, source order):** BeforeToolCall hook +
+    EventToolStart emission. Inserts immediate outcomes (skipped /
+    unknown tool) into the result channel in this phase so they
+    interleave with parallel outcomes by source position.
+  - **Execute (parallel):** Handler + AfterToolCall hook run in
+    goroutines via `golang.org/x/sync/errgroup`, fed by a buffered
+    `done` channel sized to `len(calls)`. `EventToolEnd` is yielded
+    from the main goroutine as outcomes arrive — **finish order**, so
+    observers see real concurrency. After all outcomes are drained,
+    `tool_result` blocks + `ToolLog` entries are appended in **source
+    order** so the wire transcript and audit log stay stable. Sort by
+    `ToolCallID` or read from `Snapshot().ToolLog` if you need source
+    order on the event stream.
+- Per-tool opt-out: declaring `AgentTool.ExecutionMode = ToolExecutionSequential`
+  on any tool in the batch forces the entire batch sequential — safety
+  valve for handlers that aren't thread-safe with themselves or with
+  other handlers.
+- Single-tool batches stay sequential regardless of config (no point
+  spinning up a goroutine for one call).
+- `golang.org/x/sync` (v0.20.0) added as a transitive dependency for
+  `errgroup`. No `import` change for callers.
+
+### Contract notes
+
+- Hook authors are responsible for thread-safety under
+  ToolExecutionParallel. BeforeToolCall + AfterToolCall may be
+  invoked concurrently from multiple goroutines. Protect shared state
+  externally.
+- Handler errors are converted to `IsError=true` results just like the
+  sequential path; the run continues. Only hook errors abort the run
+  (and propagate via `errgroup` cancellation to in-flight handlers).
+
 ## [0.2.0] - 2026-05-11
 
 First breaking change since v0.1.x. Two PRs landed: storage-policy is now
