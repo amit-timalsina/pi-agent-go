@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-12
+
+Observability helpers + reference example. No API breakage — the
+new `agent.RunIDFromContext` / `agent.WithRunID` helpers add a
+small ctx-based surface; the agent loop transparently decorates ctx
+with the active RunID before invoking any hook or Handler.
+
 ### Added
 
 - `agent.RunIDFromContext(ctx) string` — extracts the active RunID
@@ -260,7 +267,8 @@ four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.1.0...v0.1.1

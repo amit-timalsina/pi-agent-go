@@ -7,11 +7,10 @@ Reordering happens when reality changes.
 
 ## Status
 
-- **v0.4.0** landing — observability example (slog wiring over the
-  AgentEvent iterator + the three hooks) + `RunIDFromContext` /
-  `WithRunID` helpers for span correlation from tool handlers. No
-  framework deps; observability stays first-class but external. Tag
-  stamped on merge.
+- **v0.4.0** shipped 2026-05-12 — observability example (slog wiring
+  over the AgentEvent iterator + the three hooks) + `RunIDFromContext`
+  / `WithRunID` helpers for span correlation from tool handlers. No
+  framework deps; observability stays first-class but external.
 - **v0.3.0** shipped 2026-05-12 — parallel tool execution
   (`Config.ToolExecution = ToolExecutionParallel`, per-tool opt-out,
   source-order tool_result, finish-order EventToolEnd). Bumps Go floor
