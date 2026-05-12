@@ -7,10 +7,10 @@ Reordering happens when reality changes.
 
 ## Status
 
-- **v0.3.0** landing — parallel tool execution
+- **v0.3.0** shipped 2026-05-12 — parallel tool execution
   (`Config.ToolExecution = ToolExecutionParallel`, per-tool opt-out,
-  source-order tool_result, finish-order EventToolEnd). Tag stamped on
-  merge.
+  source-order tool_result, finish-order EventToolEnd). Bumps Go floor
+  to 1.25 (transitive via `golang.org/x/sync`).
 - **v0.2.0** shipped 2026-05-11 — FullPayloadHint + TransformContext +
   SetSystemPrompt (WWMD convergence).
 - **v1.0 ETA:** unknown. v1.0 requires ≥4 weeks production use without
