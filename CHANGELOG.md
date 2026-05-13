@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Streaming tool progress** via `agent.EmitToolDelta(ctx, fragment)`.
+  Tool handlers call this from inside their Handler to surface
+  incremental progress; the agent emits an `EventToolDelta{...}` on
+  the run's event stream. The model NEVER sees deltas — only the
+  Handler's final `Result.Summary` feeds back into the conversation.
+  - `EventToolDelta` carries `ToolCallID`, `Name`, `Delta`.
+  - Ordering: deltas for a given call arrive between its
+    `EventToolStart` and `EventToolEnd` in emit order. Under parallel
+    execution, deltas from different concurrent calls interleave
+    non-deterministically; tag observers by `ToolCallID`.
+  - Drop-on-overflow under parallel mode: a non-blocking channel
+    backs the parallel emitter so a slow consumer cannot stall a
+    Handler. Deltas are best-effort, not guaranteed.
+  - Outside a running tool context, `EmitToolDelta` returns false and
+    is a no-op — callers can branch on the return to skip work that
+    produced the delta.
+- `examples/streaming_tool` — end-to-end demo (Anthropic-backed) of a
+  count_to tool emitting one delta per second; the example prints
+  deltas as they arrive and shows the model receiving only the final
+  collected summary.
+
 ## [0.5.0] - 2026-05-12
 
 Snapshot-based resume. The biggest production unblock on the roadmap:
