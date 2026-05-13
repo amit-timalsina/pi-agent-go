@@ -19,6 +19,11 @@ import (
 //	)*
 //	EventRunEnd
 //
+// Under ToolExecutionParallel, multiple EventToolStart…EventToolEnd
+// brackets may INTERLEAVE on the wire: e.g. ToolStart(A), ToolStart(B),
+// ToolDelta(A), ToolDelta(B), ToolEnd(B), ToolEnd(A). Group events by
+// ToolCallID rather than treating brackets as serial.
+//
 // The run terminates when either (a) an assistant turn has no tool calls
 // and no steering messages are pending, (b) MaxIterations is hit, or
 // (c) an error propagates through the iterator's error half.

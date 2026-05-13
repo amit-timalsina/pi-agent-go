@@ -23,7 +23,17 @@ type deltaEmitterKey struct{}
 // parallel execution, the emitter uses non-blocking sends and may drop
 // deltas if the run's consumer falls behind — the contract is "best
 // effort observability, never block the Handler." See EventToolDelta
-// godoc for the full ordering + drop-on-overflow semantics.
+// godoc for the full ordering + drop-on-overflow semantics; tune
+// buffer capacity via Config.ToolDeltaBuffer.
+//
+// Consumer-abort behavior under sequential execution: if the run's
+// consumer aborts mid-handler (returns false from the next outer
+// yield), EmitToolDelta calls from the still-running Handler are
+// silently no-ops — the agent has no way to interrupt the Handler
+// itself. The outer ctx is propagated, so a Handler that respects
+// ctx.Done() will unwind on the caller's next cancel; otherwise the
+// abort takes effect after the Handler returns. Wire Handlers to
+// honor ctx.Done() if you need prompt abort.
 func EmitToolDelta(ctx context.Context, delta string) bool {
 	em, ok := ctx.Value(deltaEmitterKey{}).(func(string))
 	if !ok {

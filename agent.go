@@ -46,6 +46,7 @@ import (
 const (
 	defaultMaxIterations      = 32
 	steeringBufferSize        = 16
+	defaultToolDeltaBuffer    = 64
 	defaultBlockedMessage     = "tool execution blocked by policy"
 	defaultUnknownToolMessage = "unknown tool"
 )
@@ -146,6 +147,19 @@ type Config struct {
 	// run. Defaults to ToolExecutionSequential. See ToolExecutionMode
 	// godoc for the full contract.
 	ToolExecution ToolExecutionMode
+
+	// ToolDeltaBuffer is the total buffer capacity for the parallel-mode
+	// delta channel (the in-flight queue between Handlers emitting via
+	// EmitToolDelta and the run's event consumer). Sequential mode is
+	// unaffected (its emit path yields directly).
+	//
+	// 0 falls back to defaultToolDeltaBuffer (64). Tune up when handlers
+	// emit at very high cadence (curl progress, video frame counts) and
+	// the consumer cannot drain at the same rate; tune down when memory
+	// pressure matters more than observability completeness. Drop
+	// behavior is fixed: non-blocking send + silent discard if the
+	// buffer is full — handlers MUST never stall on observability.
+	ToolDeltaBuffer int
 
 	// TransformContext, when non-nil, is called at the top of every
 	// iteration with a copy of the current transcript just before the LLM
@@ -831,10 +845,14 @@ func (a *Agent) executeToolCallsParallel(
 	}
 	done := make(chan finished, len(calls))
 	// Deltas channel for EmitToolDelta calls from concurrent Handlers.
-	// Buffered to a generous multiple of call count so typical
-	// progress-line cadence doesn't backpressure handlers; non-blocking
-	// sends drop on overflow (per EventToolDelta godoc).
-	deltas := make(chan EventToolDelta, len(calls)*16)
+	// Capacity from Config.ToolDeltaBuffer (defaults to 64); non-
+	// blocking sends drop on overflow so a slow consumer never
+	// stalls a Handler. See Config.ToolDeltaBuffer godoc for tuning.
+	deltaBuf := a.cfg.ToolDeltaBuffer
+	if deltaBuf <= 0 {
+		deltaBuf = defaultToolDeltaBuffer
+	}
+	deltas := make(chan EventToolDelta, deltaBuf)
 	g, gctx := errgroup.WithContext(parCtx)
 	for i := range slots {
 		if slots[i].immediate != nil {
@@ -932,8 +950,19 @@ DRAIN:
 DRAIN_DONE:
 	// Drain any outcomes still buffered after waitDone fired
 	// (Handlers that finished while we were blocked in yield).
+	// waitDone provides happens-before for every goroutine's send to
+	// `done`, and every goroutine sends exactly one outcome on success.
+	// The ctx.Done() guard is defense in depth: if a future code path
+	// lets a goroutine return WITHOUT sending (an early-return on a
+	// new error variant, e.g.), the drain loop would otherwise wedge.
 	for pending > 0 {
-		f := <-done
+		var f finished
+		select {
+		case f = <-done:
+		case <-ctx.Done():
+			yield(nil, ctx.Err())
+			return nil, false
+		}
 		outcomes[f.idx] = f.outcome
 		pending--
 		if !yield(f.outcome.endEvent, nil) {

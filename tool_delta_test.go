@@ -191,17 +191,16 @@ func TestEmitToolDelta_DropOnOverflowDoesNotBlockHandler(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2) // two parallel tool calls scripted below
 	tool := agent.Raw("progress", "spam",
 		json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		func(ctx context.Context, _ json.RawMessage) (agent.Result, error) {
-			defer wg.Done() // both handlers will signal completion
+			defer wg.Done()
 			for i := 0; i < burst; i++ {
 				agent.EmitToolDelta(ctx, "x")
 			}
 			return agent.Result{Summary: "done"}, nil
 		})
-	wg.Add(1) // second handler
 
 	a, err := agent.New(agent.Config{
 		LLM:           fake,
@@ -213,13 +212,26 @@ func TestEmitToolDelta_DropOnOverflowDoesNotBlockHandler(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	_, err = collect(t, a.Run(context.Background(), "spam"))
+	events, err := collect(t, a.Run(context.Background(), "spam"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// Handlers all completed — the test would hang if a handler
 	// blocked on the deltas channel.
 	wg.Wait()
+	// Smoke check that AT LEAST some deltas survived: a future bug
+	// that drops 100% of deltas (e.g. mistakenly always falling into
+	// the default branch of the non-blocking send) would otherwise
+	// pass this test.
+	var deltaCount int
+	for _, ev := range events {
+		if _, ok := ev.(agent.EventToolDelta); ok {
+			deltaCount++
+		}
+	}
+	if deltaCount == 0 {
+		t.Error("expected at least some deltas to survive overflow; got 0")
+	}
 }
 
 // twoToolCallsScript: one assistant message with two parallel tool calls.
