@@ -6,6 +6,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`Result.Terminate`** — boolean field on `agent.Result`. When EVERY
+  finalized tool result in a batch sets `Terminate=true`, the agent
+  stops without making the otherwise-inevitable follow-up "model
+  explains what just happened" LLM call. Saves a turn (and the cost
+  of one) when a tool's output IS the final answer: `write_file`,
+  `send_message`, `render_artifact`, etc.
+  - AND-reduce semantics: a single `false` anywhere in the batch
+    means the agent continues with another turn so the model can
+    react to the mixed signal.
+  - Internal error results (unknown tool, BeforeToolCall-skip,
+    handler error, budget violation, AfterToolCall hook error)
+    naturally leave `Terminate=false` — they don't silently skip the
+    model's chance to recover from an internal failure.
+  - The `AfterToolCall` hook can force-terminate by setting
+    `Terminate=true` on its override; useful for guardrails above
+    the tool layer.
+  - Mirrors Mario Zechner's pi-agent v0.69.0 / #3525.
+  - New `examples/terminate_early/` demo (Anthropic-backed).
+
+### Fixed
+
+- **AfterToolCall hook error no longer aborts the run.** A hook that
+  returns a non-nil error now produces an error tool result for THAT
+  tool call only — the run continues so other in-flight parallel
+  calls aren't aborted mid-execution. Symmetric in sequential mode
+  for consistency. Mirrors Mario's pi-agent v0.67.67 (#3084).
+  - BeforeToolCall errors still abort the run (asymmetric intentional:
+    Before runs PRE-execution and leaves the agent uncertain whether
+    to skip or execute; After runs POST-execution with output we can
+    surface). Documented in `hooks.go`.
+  - Cascading cleanup: `executeOneToolCall` no longer has a path
+    that returns a non-nil error; signature simplified.
+
 ## [0.6.0] - 2026-05-13
 
 Closes the streaming-tool-results roadmap slot. Tool handlers can now

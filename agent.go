@@ -316,8 +316,12 @@ func (a *Agent) RunMessage(ctx context.Context, userMsg llm.Message) iter.Seq2[A
 				return
 			}
 
-			// Execute tool calls (sequential at v1), apply hooks, bundle results.
-			toolResults, cont := a.executeToolCalls(ctx, iteration, toolCalls, yield)
+			// Execute tool calls (sequential or parallel per Config),
+			// apply hooks, bundle results. `terminate` is true when every
+			// finalized tool result in the batch set Result.Terminate;
+			// when true, we append results to the transcript and exit
+			// without making another LLM call.
+			toolResults, terminate, cont := a.executeToolCalls(ctx, iteration, toolCalls, yield)
 			if !cont {
 				return
 			}
@@ -328,6 +332,11 @@ func (a *Agent) RunMessage(ctx context.Context, userMsg llm.Message) iter.Seq2[A
 				Content: toolResults,
 			})
 			a.mu.Unlock()
+
+			if terminate {
+				yield(EventRunEnd{FinalMessage: assistantMsg, Iterations: iteration}, nil)
+				return
+			}
 		}
 
 		// MaxIterations exhausted.
@@ -511,15 +520,23 @@ func (a *Agent) runIteration(
 
 // executeToolCalls dispatches the batch to sequential or parallel
 // execution based on Config.ToolExecution and any per-tool ExecutionMode
-// override. Returns the per-call ToolResultBlocks (one entry per tool
-// call, in SOURCE order regardless of execution mode) and a continue
-// flag.
+// override.
+//
+// Returns:
+//   - results: per-call ToolResultBlocks in SOURCE order regardless of
+//     execution mode.
+//   - terminate: true when EVERY tool result in the batch set
+//     Result.Terminate=true (see Result.Terminate godoc). When true, the
+//     run loop exits cleanly after appending results to the transcript
+//     and does NOT make another LLM call.
+//   - cont: false if the run was aborted (yield rejected, error
+//     surfaced); caller should return without progressing.
 func (a *Agent) executeToolCalls(
 	ctx context.Context,
 	iteration int,
 	calls []llm.ToolCallBlock,
 	yield func(AgentEvent, error) bool,
-) ([]llm.Block, bool) {
+) (results []llm.Block, terminate, cont bool) {
 	if a.shouldRunParallel(calls) {
 		return a.executeToolCallsParallel(ctx, iteration, calls, yield)
 	}
@@ -556,6 +573,12 @@ type toolOutcome struct {
 	resultBlock llm.ToolResultBlock
 	logEntry    ToolLogEntry
 	endEvent    EventToolEnd
+
+	// terminate carries the final Result.Terminate value (post-AfterToolCall
+	// override, post-budget-enforcement). The dispatcher AND-reduces across
+	// the batch to decide whether the agent should stop without making
+	// another LLM call. See Result.Terminate godoc for the contract.
+	terminate bool
 }
 
 // executeOneToolCall runs the Handler + budget enforcement + AfterToolCall
@@ -688,6 +711,7 @@ func (a *Agent) executeOneToolCall(
 			IsError:         isError,
 			FullPayloadHint: result.FullPayloadHint,
 		},
+		terminate: result.Terminate,
 	}
 }
 
@@ -746,13 +770,14 @@ func (a *Agent) executeToolCallsSequential(
 	iteration int,
 	calls []llm.ToolCallBlock,
 	yield func(AgentEvent, error) bool,
-) ([]llm.Block, bool) {
-	results := make([]llm.Block, 0, len(calls))
+) (results []llm.Block, terminate, cont bool) {
+	results = make([]llm.Block, 0, len(calls))
+	terminate = true // AND-reduce; flips false on the first non-terminating outcome
 	for _, call := range calls {
 		pre, err := a.preflight(ctx, iteration, call)
 		if err != nil {
 			yield(nil, err)
-			return nil, false
+			return nil, false, false
 		}
 		if pre.emitStart {
 			if !yield(EventToolStart{
@@ -760,7 +785,7 @@ func (a *Agent) executeToolCallsSequential(
 				Name:       call.Name,
 				Arguments:  call.Arguments,
 			}, nil) {
-				return nil, false
+				return nil, false, false
 			}
 		}
 		// Sequential mode: yield deltas directly. The Handler runs on
@@ -779,11 +804,12 @@ func (a *Agent) executeToolCallsSequential(
 		a.toolLog = append(a.toolLog, outcome.logEntry)
 		a.mu.Unlock()
 		results = append(results, outcome.resultBlock)
+		terminate = terminate && outcome.terminate
 		if !yield(outcome.endEvent, nil) {
-			return nil, false
+			return nil, false, false
 		}
 	}
-	return results, true
+	return results, terminate, true
 }
 
 // executeToolCallsParallel runs Handler + AfterToolCall concurrently
@@ -797,7 +823,7 @@ func (a *Agent) executeToolCallsParallel(
 	iteration int,
 	calls []llm.ToolCallBlock,
 	yield func(AgentEvent, error) bool,
-) ([]llm.Block, bool) {
+) (results []llm.Block, terminate, cont bool) {
 	// Phase 1 (sequential): run BeforeToolCall for each call, emit
 	// EventToolStart events, classify each call as immediate (skip /
 	// unknown tool — no Handler) or async (Handler to fire in Phase 2).
@@ -811,7 +837,7 @@ func (a *Agent) executeToolCallsParallel(
 		pre, err := a.preflight(ctx, iteration, call)
 		if err != nil {
 			yield(nil, err)
-			return nil, false
+			return nil, false, false
 		}
 		s := slot{call: call, pre: pre}
 		if pre.emitStart {
@@ -820,7 +846,7 @@ func (a *Agent) executeToolCallsParallel(
 				Name:       call.Name,
 				Arguments:  call.Arguments,
 			}, nil) {
-				return nil, false
+				return nil, false, false
 			}
 		} else {
 			// Skip / unknown — produce the outcome synchronously now so
@@ -906,7 +932,7 @@ DRAIN:
 			if !yield(d, nil) {
 				parCancel()
 				<-waitDone
-				return nil, false
+				return nil, false, false
 			}
 		case f := <-done:
 			outcomes[f.idx] = f.outcome
@@ -918,7 +944,7 @@ DRAIN:
 				// outlive the run, then return.
 				parCancel()
 				<-waitDone
-				return nil, false
+				return nil, false, false
 			}
 		case <-waitDone:
 			// All goroutines have returned. Either an error short-
@@ -929,7 +955,7 @@ DRAIN:
 			// waitDone.
 			if waitErr != nil {
 				yield(nil, waitErr)
-				return nil, false
+				return nil, false, false
 			}
 			break DRAIN
 		}
@@ -940,7 +966,7 @@ DRAIN:
 		select {
 		case d := <-deltas:
 			if !yield(d, nil) {
-				return nil, false
+				return nil, false, false
 			}
 		default:
 			goto DRAIN_DONE
@@ -960,13 +986,13 @@ DRAIN_DONE:
 		case f = <-done:
 		case <-ctx.Done():
 			yield(nil, ctx.Err())
-			return nil, false
+			return nil, false, false
 		}
 		outcomes[f.idx] = f.outcome
 		pending--
 		if !yield(f.outcome.endEvent, nil) {
 			parCancel()
-			return nil, false
+			return nil, false, false
 		}
 	}
 
@@ -978,11 +1004,16 @@ DRAIN_DONE:
 	}
 	a.mu.Unlock()
 
-	results := make([]llm.Block, 0, len(calls))
+	// AND-reduce terminate across the batch. Mirrors the sequential
+	// path: every outcome must opt in for the agent to stop without
+	// another LLM call.
+	terminate = true
+	results = make([]llm.Block, 0, len(calls))
 	for i := range outcomes {
 		results = append(results, outcomes[i].resultBlock)
+		terminate = terminate && outcomes[i].terminate
 	}
-	return results, true
+	return results, terminate, true
 }
 
 // buildRequest snapshots the current transcript into a llm.Request,

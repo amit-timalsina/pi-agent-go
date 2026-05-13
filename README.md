@@ -26,6 +26,7 @@ Requires Go 1.25+ (transitively, via `golang.org/x/sync`).
 | Raw tool handlers (`agent.Raw`, hand-written schema) | ✅ |
 | Parallel tool execution (`Config.ToolExecution = ToolExecutionParallel`) | ✅ |
 | Streaming tool progress (`agent.EmitToolDelta`) | ✅ |
+| Batch early-exit (`Result.Terminate`) — skip the follow-up LLM call when a tool's output IS the final answer | ✅ |
 | Three hooks: `BeforeToolCall`, `AfterToolCall`, `OnSteering` | ✅ |
 | Mid-run steering (`Steer(ctx, msg)`) | ✅ |
 | Snapshot resume (`Snapshot()` / `Restore()`) | ✅ |

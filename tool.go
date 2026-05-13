@@ -65,6 +65,33 @@ type Result struct {
 	// Deprecated: use Summary instead. Removed in v0.4.0; the migration
 	// is a single sed: `s/Result{Content:/Result{Summary:/g`.
 	Content string
+
+	// Terminate, when true, signals that the agent should stop after the
+	// current tool-call batch finishes — WITHOUT making the otherwise-
+	// inevitable follow-up LLM call that would just "explain what just
+	// happened." Useful when a tool's output IS the final answer:
+	// write_file, send_message, render_artifact, post_to_slack, etc.
+	//
+	// Batch semantics (matches Mario Zechner's pi-agent #3525): a batch
+	// terminates only when EVERY finalized tool result in the batch
+	// sets Terminate=true. A single false in the batch means the agent
+	// continues with another LLM turn so the model can react to the
+	// mixed signal. Empty batches (no tool calls — the agent already
+	// finished) don't go through this path.
+	//
+	// Internal error results (unknown-tool, BeforeToolCall-skip,
+	// handler error, budget violation, AfterToolCall hook error)
+	// naturally leave Terminate=false — they DON'T silence the next
+	// turn. The model needs the chance to recover from an internal
+	// failure. If you genuinely want a hook to force-terminate even on
+	// an internal error path, set Terminate=true on the override
+	// returned from AfterToolCall.
+	//
+	// When a batch terminates, the run's EventRunEnd carries the
+	// assistant message that issued the tool calls (NOT a follow-up
+	// message — there isn't one). Caller can recover the tool results
+	// from Snapshot().Messages or the EventToolEnd events.
+	Terminate bool
 }
 
 // effectiveSummary returns the text the model should see. Implements the
