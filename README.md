@@ -5,23 +5,36 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/amit-timalsina/pi-agent-go)](https://goreportcard.com/report/github.com/amit-timalsina/pi-agent-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A minimal single-loop agent on top of [`pi-llm-go`](https://github.com/amit-timalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Tool registry with typed handlers, three hooks (`BeforeToolCall` / `AfterToolCall` / `OnSteering`), and a buffered steering channel for mid-run injection.
+**Minimal Go agent framework for LLM tool-calling loops.** Single-loop agent on top of [`pi-llm-go`](https://github.com/amit-timalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Typed tool handlers with reflection-derived JSON schemas, parallel tool execution, three hooks for control, streaming tool progress, mid-run steering, snapshot-based resume. Works with **Anthropic Claude**, **OpenAI** (GPT-5 family), **Google Gemini**, and any OpenAI-compatible endpoint through pi-llm-go.
 
-> Status: **v0.x — pre-1.0**. API may change between minor versions; see [CHANGELOG.md](CHANGELOG.md).
+> Status: **v0.6.0, pre-1.0.** API may change between minor versions; see [CHANGELOG.md](CHANGELOG.md). Used internally at [Noumenal](https://noumenalai.com).
 
-## Why
-
-If you want an agent harness that's small enough to read in one sitting, this is it. ~1kLoC of plain Go that gives you: a loop, a tool registry, three hooks, a steering channel, and a `RunSnapshot` for observability. No multi-agent orchestration, no compaction, no session persistence, no custom-message-type extension points — those belong in your application layer, not the agent core.
-
-## Installation
+## Install
 
 ```bash
 go get github.com/amit-timalsina/pi-agent-go
 ```
 
-Requires Go 1.24 or later (transitively, via `github.com/invopop/jsonschema` v0.14.0).
+Requires Go 1.25+ (transitively, via `golang.org/x/sync`).
 
-## Quickstart
+## Capability matrix
+
+| Capability | Status |
+|---|---|
+| Single-loop agent (input → tools → response → repeat) | ✅ |
+| Typed tool handlers (`agent.Typed[I, O]`, schema via reflection) | ✅ |
+| Raw tool handlers (`agent.Raw`, hand-written schema) | ✅ |
+| Parallel tool execution (`Config.ToolExecution = ToolExecutionParallel`) | ✅ |
+| Streaming tool progress (`agent.EmitToolDelta`) | ✅ |
+| Three hooks: `BeforeToolCall`, `AfterToolCall`, `OnSteering` | ✅ |
+| Mid-run steering (`Steer(ctx, msg)`) | ✅ |
+| Snapshot resume (`Snapshot()` / `Restore()`) | ✅ |
+| Iterator-based events (`iter.Seq2[AgentEvent, error]`) | ✅ |
+| Cancellation via `context.Context` | ✅ |
+
+Works with any provider implementing [pi-llm-go's `LLM` interface](https://pkg.go.dev/github.com/amit-timalsina/pi-llm-go#LLM): Anthropic Claude, OpenAI (Chat + Responses), Google Gemini, OpenAI-compatible hosts.
+
+## Quickstart — calculator agent (Anthropic)
 
 ```go
 package main
@@ -54,7 +67,7 @@ func main() {
     a, _ := agent.New(agent.Config{
         LLM:          p,
         Model:        anthropic.ClaudeSonnet4_6,
-        SystemPrompt: "You are a calculator.",
+        SystemPrompt: "You are a calculator. Use the add tool.",
         Tools:        []agent.AgentTool{addTool},
         MaxTokens:    1024,
     })
@@ -69,6 +82,17 @@ func main() {
     }
 }
 ```
+
+## When to pick `pi-agent-go`
+
+| You want | Pick |
+|---|---|
+| A single-loop tool-calling agent in Go, multi-provider, ~1kLoC to read | **pi-agent-go** |
+| Multi-agent orchestration, chains, memory, vector stores, retrievers | [tmc/langchaingo](https://github.com/tmc/langchaingo) |
+| Just the LLM client, no agent loop | [pi-llm-go](https://github.com/amit-timalsina/pi-llm-go) directly |
+| Hand-rolled loop on top of a vendor SDK | Vendor SDK + your own switch |
+
+`pi-agent-go` deliberately stops where the agent loop stops. Multi-agent orchestration, session persistence, context compaction, and custom-message-type extension points belong in the application layer.
 
 ## Features
 
