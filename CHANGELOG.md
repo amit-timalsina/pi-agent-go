@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-13
+
+Two changes ported from upstream pi-agent (Mario Zechner, TS): a bug
+fix on AfterToolCall error handling and a new `Result.Terminate` field
+for skipping the follow-up LLM call when a tool's output IS the final
+answer. Closes the two highest-value items from the May 13 WWMD gap
+analysis.
+
 ### Added
 
 - **`Result.Terminate`** — boolean field on `agent.Result`. When EVERY
@@ -379,7 +387,8 @@ four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.3.0...v0.4.0
