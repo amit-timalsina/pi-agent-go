@@ -549,6 +549,12 @@ type toolOutcome struct {
 // EventToolStart emission) is the caller's responsibility — this function
 // is invoked once the loop has decided the call should proceed.
 //
+// emitDelta, when non-nil, is installed into ctx so Handlers that call
+// EmitToolDelta(ctx, ...) reach the run's event stream via the caller's
+// preferred sink (direct yield in sequential mode, channel send in
+// parallel mode). nil emitDelta means "no observers registered"; the
+// Handler-side EmitToolDelta call returns false and is a no-op.
+//
 // Safe to call from multiple goroutines under ToolExecutionParallel:
 // reads only immutable closure data (cfg, tools map) and the
 // caller-owned preflightResult, and produces a fully-owned
@@ -559,6 +565,7 @@ func (a *Agent) executeOneToolCall(
 	iteration int,
 	call llm.ToolCallBlock,
 	pre preflightResult,
+	emitDelta func(string),
 ) (toolOutcome, error) {
 	info, rc, tool, toolFound, skip, skipMsg := pre.info, pre.rc, pre.tool, pre.toolFound, pre.skip, pre.skipMsg
 	startedAt := time.Now()
@@ -590,7 +597,11 @@ func (a *Agent) executeOneToolCall(
 		result = Result{Summary: defaultUnknownToolMessage + ": " + info.Name}
 		isError = true
 	default:
-		r, err := tool.Handler(ctx, info.Arguments)
+		handlerCtx := ctx
+		if emitDelta != nil {
+			handlerCtx = withDeltaEmitter(ctx, emitDelta)
+		}
+		r, err := tool.Handler(handlerCtx, info.Arguments)
 		if err != nil {
 			result = Result{Summary: err.Error()}
 			isError = true
@@ -726,7 +737,18 @@ func (a *Agent) executeToolCallsSequential(
 				return nil, false
 			}
 		}
-		outcome, err := a.executeOneToolCall(ctx, iteration, call, pre)
+		// Sequential mode: yield deltas directly. The Handler runs on
+		// this goroutine, so direct yield is thread-safe. yield()
+		// returning false means the consumer aborted; we don't have a
+		// clean way to propagate that to a mid-handler EmitToolDelta
+		// caller, so we silently swallow the false — the next yield
+		// (the EventToolEnd or a steering/iteration event) will pick up
+		// the abort and short-circuit the run.
+		seqCall := call
+		emitDelta := func(delta string) {
+			yield(EventToolDelta{ToolCallID: seqCall.ID, Name: seqCall.Name, Delta: delta}, nil)
+		}
+		outcome, err := a.executeOneToolCall(ctx, iteration, call, pre, emitDelta)
 		if err != nil {
 			yield(nil, err)
 			return nil, false
@@ -781,8 +803,8 @@ func (a *Agent) executeToolCallsParallel(
 		} else {
 			// Skip / unknown — produce the outcome synchronously now so
 			// Phase 2 can drain it through the same channel ordering as
-			// real Handler runs.
-			outcome, err := a.executeOneToolCall(ctx, iteration, call, pre)
+			// real Handler runs. No Handler runs, so no emitDelta needed.
+			outcome, err := a.executeOneToolCall(ctx, iteration, call, pre, nil)
 			if err != nil {
 				yield(nil, err)
 				return nil, false
@@ -808,6 +830,11 @@ func (a *Agent) executeToolCallsParallel(
 		outcome toolOutcome
 	}
 	done := make(chan finished, len(calls))
+	// Deltas channel for EmitToolDelta calls from concurrent Handlers.
+	// Buffered to a generous multiple of call count so typical
+	// progress-line cadence doesn't backpressure handlers; non-blocking
+	// sends drop on overflow (per EventToolDelta godoc).
+	deltas := make(chan EventToolDelta, len(calls)*16)
 	g, gctx := errgroup.WithContext(parCtx)
 	for i := range slots {
 		if slots[i].immediate != nil {
@@ -815,8 +842,17 @@ func (a *Agent) executeToolCallsParallel(
 			continue
 		}
 		s := slots[i]
+		// Per-call delta emitter: captures the tool call's ID + name
+		// and shares the run's deltas channel. Non-blocking — if the
+		// buffer is full (slow consumer), the delta is dropped.
+		emitDelta := func(delta string) {
+			select {
+			case deltas <- EventToolDelta{ToolCallID: s.call.ID, Name: s.call.Name, Delta: delta}:
+			default:
+			}
+		}
 		g.Go(func() error {
-			outcome, err := a.executeOneToolCall(gctx, iteration, s.call, s.pre)
+			outcome, err := a.executeOneToolCall(gctx, iteration, s.call, s.pre, emitDelta)
 			if err != nil {
 				// Returning err cancels gctx; other handlers see the
 				// cancellation. Caller surfaces the error after Wait().
@@ -849,6 +885,12 @@ func (a *Agent) executeToolCallsParallel(
 DRAIN:
 	for pending > 0 {
 		select {
+		case d := <-deltas:
+			if !yield(d, nil) {
+				parCancel()
+				<-waitDone
+				return nil, false
+			}
 		case f := <-done:
 			outcomes[f.idx] = f.outcome
 			pending--
@@ -875,6 +917,19 @@ DRAIN:
 			break DRAIN
 		}
 	}
+	// Drain any deltas still buffered after waitDone fired (last
+	// goroutine may have emitted one just before returning).
+	for {
+		select {
+		case d := <-deltas:
+			if !yield(d, nil) {
+				return nil, false
+			}
+		default:
+			goto DRAIN_DONE
+		}
+	}
+DRAIN_DONE:
 	// Drain any outcomes still buffered after waitDone fired
 	// (Handlers that finished while we were blocked in yield).
 	for pending > 0 {
