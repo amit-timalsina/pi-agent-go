@@ -73,7 +73,8 @@ func main() {
 ## Features
 
 - **Single-loop agent.** Input → optional tool calls → response → repeat. Terminates when the model emits an assistant turn with no tool calls (or `MaxIterations` is hit).
-- **Iterator-based events.** `Run` returns `iter.Seq2[AgentEvent, error]`. Type-switch on the concrete events for the granularity you care about. Token-level via `EventLLMStream`, message-level via `EventAssistantMessage`, tool-level via `EventToolStart`/`EventToolEnd`.
+- **Iterator-based events.** `Run` returns `iter.Seq2[AgentEvent, error]`. Type-switch on the concrete events for the granularity you care about. Token-level via `EventLLMStream`, message-level via `EventAssistantMessage`, tool-level via `EventToolStart`/`EventToolDelta`/`EventToolEnd`.
+- **Streaming tool progress.** Tool handlers call `agent.EmitToolDelta(ctx, "fragment")` to surface incremental progress via `EventToolDelta`. The model still sees only the final `Result.Summary`; UIs and observers get per-token progress on long-running tools (shell, sub-agent calls, multi-step HTTP).
 - **Typed tools.** `Typed[I, O](name, desc, handler, serialize)` derives the JSON Schema from `I` and decodes raw arguments into the typed input. `Raw(...)` for when you need to ship a hand-written schema.
 - **Three hooks.** `BeforeToolCall` (skip with custom error result), `AfterToolCall` (override result), `OnSteering` (drop or rewrite injected messages). Synchronous, error-returning.
 - **Steering channel.** `Steer(ctx, msg)` injects a user message; drained at the next iteration boundary. Buffered (capacity 16).

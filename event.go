@@ -15,9 +15,14 @@ import (
 //	( EventIterationStart
 //	  EventLLMStream*   // wraps every llm.StreamEvent for that LLM call
 //	  EventAssistantMessage
-//	  ( EventSteering* | EventToolStart EventToolEnd )*
+//	  ( EventSteering* | EventToolStart EventToolDelta* EventToolEnd )*
 //	)*
 //	EventRunEnd
+//
+// Under ToolExecutionParallel, multiple EventToolStart…EventToolEnd
+// brackets may INTERLEAVE on the wire: e.g. ToolStart(A), ToolStart(B),
+// ToolDelta(A), ToolDelta(B), ToolEnd(B), ToolEnd(A). Group events by
+// ToolCallID rather than treating brackets as serial.
 //
 // The run terminates when either (a) an assistant turn has no tool calls
 // and no steering messages are pending, (b) MaxIterations is hit, or
@@ -71,6 +76,33 @@ type EventToolStart struct {
 	Arguments  json.RawMessage
 }
 
+// EventToolDelta is an incremental progress fragment surfaced by a tool
+// Handler via EmitToolDelta. The model NEVER sees deltas — only the
+// Handler's final Result.Summary feeds back into the conversation.
+// Deltas are advisory observability output: UIs streaming a long-
+// running tool's progress, log shippers, sub-agent dashboards, etc.
+//
+// Ordering guarantees:
+//   - Sequential execution mode: all deltas for a given tool call
+//     arrive between that call's EventToolStart and EventToolEnd, in
+//     the order the Handler emitted them.
+//   - Parallel execution mode: deltas for one tool call still arrive
+//     between that call's Start and End in emit order, but deltas
+//     from DIFFERENT concurrent calls interleave non-deterministically.
+//     Tag observers by ToolCallID, not by arrival order.
+//
+// Drop-on-overflow: in parallel mode the agent uses a non-blocking
+// channel send to surface deltas. If the run's consumer is slow to
+// drain the iterator and the buffer fills up, deltas are dropped
+// silently. This is a deliberate trade-off — handlers must NEVER block
+// on observability — but it means deltas are best-effort, not
+// guaranteed.
+type EventToolDelta struct {
+	ToolCallID string
+	Name       string
+	Delta      string
+}
+
 // EventToolEnd is emitted after a tool finishes executing and any
 // AfterToolCall hook has been applied. FullPayloadHint, when non-empty,
 // is an opaque caller-defined string the tool surfaced alongside its
@@ -99,5 +131,6 @@ func (EventLLMStream) isAgentEvent()        {}
 func (EventAssistantMessage) isAgentEvent() {}
 func (EventSteering) isAgentEvent()         {}
 func (EventToolStart) isAgentEvent()        {}
+func (EventToolDelta) isAgentEvent()        {}
 func (EventToolEnd) isAgentEvent()          {}
 func (EventRunEnd) isAgentEvent()           {}
