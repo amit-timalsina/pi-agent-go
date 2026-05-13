@@ -7,6 +7,14 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v0.7.0** shipped 2026-05-13 — Two ports from upstream pi-agent
+  (Mario v0.67.67 + v0.69.0): `Result.Terminate` for batch-wide early
+  exit when a tool's output IS the final answer (saves the
+  otherwise-inevitable follow-up "model explains what just happened"
+  LLM call), plus a fix where AfterToolCall hook errors become an
+  error tool result for that call instead of aborting the run /
+  killing other in-flight parallel handlers. New
+  `examples/terminate_early/`.
 - **v0.6.0** shipped 2026-05-13 — Streaming tool progress via
   `agent.EmitToolDelta(ctx, fragment)` + new `EventToolDelta` variant.
   Tool handlers surface incremental progress without the model seeing
@@ -32,27 +40,57 @@ Reordering happens when reality changes.
   API churn + at least one external Go consumer driving the loop in a
   real workload.
 
-## Mid-term (v0.7+)
+## Mid-term (v0.8+)
 
-- **`prepareNextTurn` + `shouldStopAfterTurn` hooks.** Mario's loop has
-  eight hooks; we have three. Two of his five missing ones are
-  load-bearing for long-running agents:
-  - `prepareNextTurn` — runs between iterations; can inject a synthetic
-    user message, change tools, swap model. Different from
-    TransformContext: this mutates durable state, not just the request.
-  - `shouldStopAfterTurn` — graceful stop condition; returns true to
-    end the run cleanly before the next LLM call. Useful for context-
-    budget guardrails.
-  - The other three Mario hooks (`onPayload`, `onResponse`, `getApiKey`)
-    don't map cleanly to Go idioms; defer indefinitely.
-- **Subagent pattern**: a tool whose handler spawns a child `Agent.Run`
-  with its own model/tools/prompt and returns the final assistant
-  message as the parent's tool result. Ships as a `subagent.Tool(...)`
-  constructor, not a Config change. Open design questions on event
-  surfacing + cost accounting that warrant punting.
+Items below are purely additive: each is a new optional Config hook
+or new optional method. None churns existing surface. Each waits for
+a real consumer ask before landing — adding hooks before the shape
+is settled risks signature churn that the Noumenal internal consumer
+would feel.
+
+- **`shouldStopAfterTurn` hook** (Mario v0.72.0). Graceful early exit
+  before the next LLM call; caller controls the stop condition
+  (context-budget guardrail, run-duration cap, custom signal).
+  Returns `bool`; pure addition; cheap to ship when a consumer asks.
+- **`prepareNextTurn` hook** (Mario). Mutates durable state between
+  iterations — can inject a synthetic user message, swap tools, swap
+  model. Different from `TransformContext` (which only mutates the
+  LLM request, not the durable transcript). Useful for long-running
+  agents that need to evolve their tool set or model choice.
+- **`prepareArguments` per tool** (Mario). Compatibility shim that
+  fixes malformed model-emitted JSON before schema validation. Small
+  helper on `AgentTool`. Useful for models that occasionally return
+  slightly wrong arg shapes; cheap to add.
+- **`getFollowUpMessages` hook** (Mario). Second queue, drains AFTER
+  the agent would otherwise stop (vs `Steer` which drains at iteration
+  boundary mid-run). Use case: user typed while agent was finishing;
+  pick up after. Could potentially fold into existing `Steer` with a
+  mode flag.
+- **`getApiKey` hook** (Mario). Dynamic API key resolution for
+  expiring OAuth tokens. Lower priority — only matters for
+  OAuth-backed providers; most consumers bake the key in at provider
+  construction. Defer until OAuth is a real ask.
+- **Subagent pattern**: a tool whose handler spawns a child
+  `Agent.Run` with its own model/tools/prompt and returns the final
+  assistant message as the parent's tool result. Ships as a
+  `subagent.Tool(...)` constructor, not a Config change. Open design
+  questions on event surfacing + cost accounting; warrant punting.
 - **Tool-result caching**: agent-level cache keyed on `(name, args)`
   for deterministic tools, opt-in via `AgentTool.CacheKey()`. Saves
   LLM-time on replay. Not in Mario; user-requested.
+
+## Explicitly skipped from Mario
+
+- **Extensible `AgentMessage` via declaration merging.** TS-specific
+  pattern; doesn't map cleanly to Go. Our `llm.Block` sum-type
+  approach is the Go-native equivalent; adding a parallel custom-
+  message surface would dilute it.
+- **`agentLoopContinue` (retry from existing context).** Niche; our
+  `RunMessage` covers the common case. Revisit if a consumer asks.
+- **Harness layer** (`harness/` directory in Mario: shell tools,
+  compaction, session repos, skills, system-prompt templates). Caller's
+  job. We're the framework, not the harness. Documented in
+  `Out of scope`.
 
 ## Out of scope (intentionally)
 
