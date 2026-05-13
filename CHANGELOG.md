@@ -18,9 +18,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     means the agent continues with another turn so the model can
     react to the mixed signal.
   - Internal error results (unknown tool, BeforeToolCall-skip,
-    handler error, budget violation, AfterToolCall hook error)
-    naturally leave `Terminate=false` — they don't silently skip the
+    handler error, budget violation, AfterToolCall hook error) drop
+    `Terminate=false` explicitly when the loop builds the synthetic
+    error result — preserving terminate would silently skip the
     model's chance to recover from an internal failure.
+  - The `AfterToolCall` hook's override REPLACES the underlying
+    result entirely (no deep merge). If a hook wants to preserve
+    the handler's `Terminate` value across a redaction override, it
+    must copy the field through explicitly. Documented in
+    `agent.Result.Terminate` godoc with the canonical code snippet.
   - The `AfterToolCall` hook can force-terminate by setting
     `Terminate=true` on its override; useful for guardrails above
     the tool layer.

@@ -661,12 +661,23 @@ func (a *Agent) executeOneToolCall(
 	if a.cfg.AfterToolCall != nil {
 		override, err := a.cfg.AfterToolCall(ctx, rc, info, result, isError)
 		if err != nil {
+			// Synthetic error result; FullPayloadHint is DROPPED because
+			// the hint points to the original tool's payload and the
+			// synthetic error has nothing to do with that artifact. A
+			// model following the hint would be misled. Terminate is
+			// dropped for the same reason — the hook signaling failure
+			// shouldn't get an early-exit pass.
 			result = Result{
-				Summary:         fmt.Sprintf("AfterToolCall hook error: %v", err),
-				FullPayloadHint: result.FullPayloadHint,
+				Summary: fmt.Sprintf("AfterToolCall hook error: %v", err),
 			}
 			isError = true
 		} else if override != nil {
+			// Override REPLACES the result entirely. Fields the hook
+			// omitted (including Terminate, FullPayloadHint) take their
+			// zero values. Hooks that want to preserve any prior value
+			// must copy it through explicitly. This matches Mario's
+			// "no deep merge" semantics and is the simplest contract
+			// for the hook to reason about.
 			result = *override
 		}
 	}
@@ -675,6 +686,13 @@ func (a *Agent) executeOneToolCall(
 	// abort the run, we replace the result with a clear error so the
 	// model sees the violation and the tool author sees it in tests /
 	// event logs.
+	//
+	// Terminate is INTENTIONALLY dropped here even if the tool tried
+	// to set it. A budget violation is a bug; the model needs the
+	// chance to react to the bug rather than have an early-exit
+	// pass silently honored. FullPayloadHint is preserved because
+	// the underlying payload was fine — only the bounded Summary
+	// was over budget.
 	effective := result.effectiveSummary()
 	if len(effective) > maxSize {
 		result = Result{

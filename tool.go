@@ -79,13 +79,25 @@ type Result struct {
 	// mixed signal. Empty batches (no tool calls — the agent already
 	// finished) don't go through this path.
 	//
-	// Internal error results (unknown-tool, BeforeToolCall-skip,
-	// handler error, budget violation, AfterToolCall hook error)
-	// naturally leave Terminate=false — they DON'T silence the next
-	// turn. The model needs the chance to recover from an internal
-	// failure. If you genuinely want a hook to force-terminate even on
-	// an internal error path, set Terminate=true on the override
-	// returned from AfterToolCall.
+	// Internal error results never propagate Terminate=true. The loop
+	// drops it explicitly when it builds a synthetic error result for:
+	// unknown-tool, BeforeToolCall-skip, handler-error, budget
+	// violation, or AfterToolCall hook error. The rationale is uniform:
+	// an internal failure should never silently skip the model's
+	// chance to react. To force-terminate after an error, set
+	// Terminate=true on the override returned from AfterToolCall (the
+	// hook sees the original isError flag).
+	//
+	// AfterToolCall override semantics: the hook's returned *Result
+	// REPLACES the underlying tool result entirely. There is NO deep
+	// merge. If the handler returned Terminate=true and the hook
+	// returns an override that omits the field, Terminate becomes
+	// false (Go zero-value). Hooks that want to preserve the
+	// handler's Terminate must copy it through explicitly:
+	//
+	//   override := &agent.Result{Summary: "redacted"}
+	//   override.Terminate = r.Terminate  // preserve through redaction
+	//   return override, nil
 	//
 	// When a batch terminates, the run's EventRunEnd carries the
 	// assistant message that issued the tool calls (NOT a follow-up

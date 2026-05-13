@@ -185,6 +185,107 @@ func TestTerminate_AfterToolCallHookCanForceTerminate(t *testing.T) {
 	}
 }
 
+// TestTerminate_HookOverrideWithoutTerminateDropsIt verifies the
+// documented "override replaces the result entirely, no deep merge"
+// behavior: if the handler returns Terminate=true but the
+// AfterToolCall hook returns an override that omits the field, the
+// Result.Terminate value drops to false (Go zero-value) and the agent
+// continues with another LLM call.
+//
+// Hooks that want to preserve the handler's Terminate must copy it
+// through explicitly (`override.Terminate = result.Terminate`).
+func TestTerminate_HookOverrideWithoutTerminateDropsIt(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			toolCallScript("call-1", "tool_a", `{}`),
+			// Iteration 2: model "explains" — needed because override
+			// drops Terminate.
+			textOnlyScript("explanation after the drop"),
+		},
+	}
+	a, _ := agent.New(agent.Config{
+		LLM:   fake,
+		Model: "test",
+		Tools: []agent.AgentTool{terminateTool("tool_a", "raw output", true)},
+		AfterToolCall: func(_ context.Context, _ agent.RunContext, _ agent.ToolCallInfo, _ agent.Result, _ bool) (*agent.Result, error) {
+			// Override that does NOT carry Terminate through.
+			return &agent.Result{Summary: "redacted"}, nil
+		},
+	})
+	_, err := collect(t, a.Run(context.Background(), "go"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(fake.requests) != 2 {
+		t.Errorf("LLM calls: got %d, want 2 (override-without-Terminate should drop the early exit)", len(fake.requests))
+	}
+}
+
+// TestTerminate_MixedTextAndToolUseInFinalMessage verifies that when
+// Terminate fires, EventRunEnd.FinalMessage is the message that
+// issued the tool call — even when it ALSO contains a TextBlock
+// before the tool_use (Anthropic does this routinely with "I'll use
+// the X tool. <tool_use>"). The consumer reading FinalMessage should
+// be able to extract that prefatory text.
+func TestTerminate_MixedTextAndToolUseInFinalMessage(t *testing.T) {
+	t.Parallel()
+
+	// Custom script: text + tool_use in the same assistant message.
+	mixed := []llm.StreamEvent{
+		llm.EventMessageStart{Model: "test"},
+		llm.EventTextStart{BlockIndex: 0},
+		llm.EventTextDelta{BlockIndex: 0, Delta: "I'll save it now."},
+		llm.EventTextEnd{BlockIndex: 0},
+		llm.EventToolCallStart{BlockIndex: 1, ID: "call-1", Name: "tool_a"},
+		llm.EventToolCallEnd{BlockIndex: 1, Arguments: []byte(`{}`)},
+		llm.EventMessageEnd{
+			StopReason: llm.StopReasonToolUse,
+			Usage:      llm.Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8},
+		},
+	}
+	fake := &fakeLLM{scripts: [][]llm.StreamEvent{mixed}}
+	a, _ := agent.New(agent.Config{
+		LLM:   fake,
+		Model: "test",
+		Tools: []agent.AgentTool{terminateTool("tool_a", "ok", true)},
+	})
+	events, err := collect(t, a.Run(context.Background(), "go"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Locate the EventRunEnd's FinalMessage and assert both blocks survive.
+	var sawEnd bool
+	for _, ev := range events {
+		end, ok := ev.(agent.EventRunEnd)
+		if !ok {
+			continue
+		}
+		sawEnd = true
+		var hasText, hasToolCall bool
+		var text string
+		for _, b := range end.FinalMessage.Content {
+			switch bb := b.(type) {
+			case llm.TextBlock:
+				hasText = true
+				text = bb.Text
+			case llm.ToolCallBlock:
+				hasToolCall = true
+			}
+		}
+		if !hasText || !hasToolCall {
+			t.Errorf("FinalMessage on Terminate: hasText=%v hasToolCall=%v; both expected", hasText, hasToolCall)
+		}
+		if text != "I'll save it now." {
+			t.Errorf("FinalMessage text: got %q, want 'I'll save it now.'", text)
+		}
+	}
+	if !sawEnd {
+		t.Fatal("missing EventRunEnd")
+	}
+}
+
 // TestTerminate_InternalErrorResultDoesNotTerminate verifies that
 // internal error paths (unknown tool, BeforeToolCall-skip, etc.) leave
 // Terminate=false even if other tools in the batch opt in — the model
