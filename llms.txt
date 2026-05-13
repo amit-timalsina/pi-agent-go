@@ -1,0 +1,144 @@
+# pi-agent-go
+
+> Minimal Go agent framework for LLM tool-calling loops. Single-loop agent on top of pi-llm-go: input → optional tool calls → response → repeat until done. Typed tool handlers with reflection-derived JSON schemas, parallel tool execution, three hooks for control, streaming tool progress, mid-run steering, snapshot-based resume. Works with Anthropic Claude, OpenAI (GPT-5 family), Google Gemini, and any OpenAI-compatible endpoint through pi-llm-go. Go 1.25+.
+
+## Install
+
+```
+go get github.com/amit-timalsina/pi-agent-go
+```
+
+## Core types
+
+- `agent.Agent` — owns the loop. Created via `New(Config)`; driven via `Run(ctx, prompt)` or `RunMessage(ctx, llm.Message)`.
+- `agent.Config` — `LLM`, `Model`, `SystemPrompt`, `Tools`, `MaxIterations`, `Temperature`, `MaxTokens`, `Thinking`, hooks, `ToolExecution`, `ToolDeltaBuffer`, `TransformContext`.
+- `agent.AgentTool` — embeds `llm.Tool` + a `Handler`. Constructed via `agent.Typed[I, O]` (schema from reflection) or `agent.Raw` (hand-written schema).
+- `agent.Result` — what a tool handler returns: `Summary` (text the model sees, bounded by MaxSummarySize) + optional `FullPayloadHint` (caller-defined locator the model can retrieve later).
+- `agent.AgentEvent` — sealed sum emitted by `Run`: `EventRunStart`, `EventIterationStart`, `EventLLMStream`, `EventAssistantMessage`, `EventSteering`, `EventToolStart`, `EventToolDelta`, `EventToolEnd`, `EventRunEnd`.
+
+## Hooks
+
+Three hooks, all synchronous, all error-returning:
+
+- `BeforeToolCall(ctx, RunContext, ToolCallInfo) (skip bool, errorResult string, err error)` — runs before every tool call; can skip with a custom error result; hook error aborts the run.
+- `AfterToolCall(ctx, RunContext, ToolCallInfo, Result, isErr bool) (*Result, error)` — runs after every tool call; can override the result; hook error aborts.
+- `OnSteering(ctx, RunContext, llm.Message) (drop bool, err error)` — runs when a steering message is dequeued; can drop it.
+
+Concurrency under `ToolExecution = ToolExecutionParallel`: `AfterToolCall` may run concurrently across in-flight tools. `BeforeToolCall` stays sequential in source order even in parallel mode. `OnSteering` is never concurrent with itself or other hooks.
+
+## Common usage patterns
+
+### Calculator agent (one tool, Anthropic)
+
+```go
+type AddArgs struct {
+    A int `json:"a" jsonschema:"description=first addend"`
+    B int `json:"b" jsonschema:"description=second addend"`
+}
+addTool := agent.Typed[AddArgs, int]("add", "Add two integers.",
+    func(ctx context.Context, in AddArgs) (int, error) { return in.A + in.B, nil },
+    func(sum int) string { return fmt.Sprintf("%d", sum) },
+)
+a, _ := agent.New(agent.Config{
+    LLM: provider, Model: anthropic.ClaudeSonnet4_6,
+    SystemPrompt: "You are a calculator. Use the add tool.",
+    Tools: []agent.AgentTool{addTool}, MaxTokens: 1024,
+})
+for event, err := range a.Run(ctx, "what is 137+84?") {
+    if err != nil { return err }
+    // type-switch on event for the granularity you need
+}
+```
+
+### Parallel tool execution
+
+```go
+agent.New(agent.Config{
+    // ...
+    ToolExecution: agent.ToolExecutionParallel,
+})
+// Source order preserved for tool_result blocks AND for the BeforeToolCall
+// hook. Handlers run concurrently. Source-order vs finish-order matters
+// when multiple tools are called in one assistant turn.
+```
+
+### Streaming tool progress
+
+```go
+shellTool := agent.Raw("shell", "Run a shell command.", schema,
+    func(ctx context.Context, args json.RawMessage) (agent.Result, error) {
+        // emit progress as lines arrive; the model NEVER sees these
+        for scanner.Scan() {
+            agent.EmitToolDelta(ctx, scanner.Text())
+        }
+        return agent.Result{Summary: collected}, nil
+    },
+)
+// Observers see EventToolDelta between EventToolStart and EventToolEnd.
+// Non-blocking under parallel: drops on overflow. Tune Config.ToolDeltaBuffer.
+```
+
+### Mid-run steering
+
+```go
+go func() {
+    time.Sleep(time.Second)
+    a.Steer(ctx, llm.Message{
+        Role: llm.RoleUser,
+        Content: []llm.Block{llm.TextBlock{Text: "actually, do X instead"}},
+    })
+}()
+// Drained at the next iteration boundary; buffered channel (capacity 16).
+```
+
+### Snapshot / resume
+
+```go
+snap := a.Snapshot()                          // immutable copy of run state
+// persist `snap` (JSON, Postgres row, S3 object, whatever)
+a2, _ := agent.Restore(cfg, snap)             // reconstruct after process restart
+for event, err := range a2.Run(ctx, prompt) { /* ... */ }
+```
+
+### Run context inside a handler
+
+```go
+agent.Typed[Args, Out]("name", "...",
+    func(ctx context.Context, in Args) (Out, error) {
+        runID := agent.RunIDFromContext(ctx)  // for span correlation
+        agent.EmitToolDelta(ctx, "starting")  // streaming progress
+        // ... work ...
+        return result, nil
+    }, serialize,
+)
+```
+
+## Sibling library
+
+- [pi-llm-go](https://github.com/amit-timalsina/pi-llm-go) — the LLM client this agent is built on. Provider-agnostic streaming completions for Anthropic / OpenAI / Gemini.
+
+## Examples directory
+
+- [examples/hello_agent](examples/hello_agent) — end-to-end calculator tool agent.
+- [examples/multi_tool](examples/multi_tool) — multiple tools in one config.
+- [examples/with_hooks](examples/with_hooks) — BeforeToolCall + AfterToolCall + OnSteering.
+- [examples/steering](examples/steering) — `Steer()` injecting mid-run messages.
+- [examples/snapshot_resume](examples/snapshot_resume) — `Snapshot()` + `Restore()` across a simulated process restart.
+- [examples/bounded_results](examples/bounded_results) — `MaxSummarySize` + `FullPayloadHint` for tools with large outputs.
+- [examples/observability](examples/observability) — OpenTelemetry span + slog wiring over the AgentEvent iterator.
+- [examples/streaming_tool](examples/streaming_tool) — `EmitToolDelta` surfacing tool progress.
+
+## Versioning and stability
+
+Pre-1.0 (v0.x). API may change between minor versions; every change documented in CHANGELOG.md. v1.0 lands when the loop has driven real production work for ≥4 weeks without churn. Used internally at Noumenal as of May 2026.
+
+## License
+
+MIT. Attribution to upstream `pi-agent` (Mario Zechner, MIT) in LICENSE and README.
+
+## Links
+
+- pkg.go.dev: https://pkg.go.dev/github.com/amit-timalsina/pi-agent-go
+- CHANGELOG: [CHANGELOG.md](CHANGELOG.md)
+- ROADMAP: [ROADMAP.md](ROADMAP.md)
+- LLM client: [pi-llm-go](https://github.com/amit-timalsina/pi-llm-go)
