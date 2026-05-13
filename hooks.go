@@ -31,10 +31,20 @@ type BeforeToolCallHook func(
 // AfterToolCallHook runs after the tool's Handler completes (success or
 // error), before the result is appended to the transcript and the
 // EventToolEnd event is emitted. The hook may override the result by
-// returning a non-nil pointer. Returning err != nil aborts the run.
+// returning a non-nil pointer. Returning err != nil produces an error
+// tool result for THIS tool call only — the run continues so other
+// in-flight parallel calls aren't aborted mid-execution.
 //
-// Use to inject post-processing (annotation, logging) or to mask sensitive
-// fields from the model.
+// This is asymmetric with BeforeToolCallHook, which aborts the run on
+// hook error. The asymmetry is intentional: a failed Before hook runs
+// PRE-execution and leaves the agent uncertain whether to skip or
+// execute; aborting is safe. AfterToolCall runs POST-execution; the
+// tool already produced output we can surface, so the safer default
+// is "convert the hook failure to an error tool result and let the
+// batch finish."
+//
+// Use to inject post-processing (annotation, logging) or to mask
+// sensitive fields from the model.
 type AfterToolCallHook func(
 	ctx context.Context,
 	rc RunContext,

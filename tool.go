@@ -65,6 +65,45 @@ type Result struct {
 	// Deprecated: use Summary instead. Removed in v0.4.0; the migration
 	// is a single sed: `s/Result{Content:/Result{Summary:/g`.
 	Content string
+
+	// Terminate, when true, signals that the agent should stop after the
+	// current tool-call batch finishes — WITHOUT making the otherwise-
+	// inevitable follow-up LLM call that would just "explain what just
+	// happened." Useful when a tool's output IS the final answer:
+	// write_file, send_message, render_artifact, post_to_slack, etc.
+	//
+	// Batch semantics (matches Mario Zechner's pi-agent #3525): a batch
+	// terminates only when EVERY finalized tool result in the batch
+	// sets Terminate=true. A single false in the batch means the agent
+	// continues with another LLM turn so the model can react to the
+	// mixed signal. Empty batches (no tool calls — the agent already
+	// finished) don't go through this path.
+	//
+	// Internal error results never propagate Terminate=true. The loop
+	// drops it explicitly when it builds a synthetic error result for:
+	// unknown-tool, BeforeToolCall-skip, handler-error, budget
+	// violation, or AfterToolCall hook error. The rationale is uniform:
+	// an internal failure should never silently skip the model's
+	// chance to react. To force-terminate after an error, set
+	// Terminate=true on the override returned from AfterToolCall (the
+	// hook sees the original isError flag).
+	//
+	// AfterToolCall override semantics: the hook's returned *Result
+	// REPLACES the underlying tool result entirely. There is NO deep
+	// merge. If the handler returned Terminate=true and the hook
+	// returns an override that omits the field, Terminate becomes
+	// false (Go zero-value). Hooks that want to preserve the
+	// handler's Terminate must copy it through explicitly:
+	//
+	//   override := &agent.Result{Summary: "redacted"}
+	//   override.Terminate = r.Terminate  // preserve through redaction
+	//   return override, nil
+	//
+	// When a batch terminates, the run's EventRunEnd carries the
+	// assistant message that issued the tool calls (NOT a follow-up
+	// message — there isn't one). Caller can recover the tool results
+	// from Snapshot().Messages or the EventToolEnd events.
+	Terminate bool
 }
 
 // effectiveSummary returns the text the model should see. Implements the

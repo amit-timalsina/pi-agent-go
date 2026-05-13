@@ -118,8 +118,27 @@ type EventToolEnd struct {
 	FullPayloadHint string
 }
 
-// EventRunEnd is the terminal event for a Run. FinalMessage is the last
-// assistant message produced; Iterations is the total LLM call count.
+// EventRunEnd is the terminal event for a Run.
+//
+// FinalMessage is the LAST assistant message produced. Semantics
+// depend on how the run ended:
+//
+//   - Run ended naturally (assistant produced no tool calls):
+//     FinalMessage is that "I'm done" assistant message — model's
+//     final answer.
+//   - Run ended via Result.Terminate: FinalMessage is the assistant
+//     message that ISSUED the tool calls that triggered termination.
+//     There is no follow-up "explain what happened" message — that's
+//     the whole point of the Terminate optimization. The tool results
+//     themselves are in Snapshot().Messages (as the next RoleTool
+//     message) and on the EventToolEnd events that fired before this
+//     EventRunEnd. Consumers rendering "the model's final answer"
+//     should treat the tool result as the answer in this case.
+//   - Run ended on MaxIterations: FinalMessage is the last assistant
+//     message produced before the cap was hit; the iterator's error
+//     half also carries ErrMaxIterations.
+//
+// Iterations is the total LLM call count.
 type EventRunEnd struct {
 	FinalMessage llm.Message
 	Iterations   int
