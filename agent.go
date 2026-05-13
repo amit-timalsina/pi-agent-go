@@ -580,7 +580,7 @@ func (a *Agent) executeOneToolCall(
 	call llm.ToolCallBlock,
 	pre preflightResult,
 	emitDelta func(string),
-) (toolOutcome, error) {
+) toolOutcome {
 	info, rc, tool, toolFound, skip, skipMsg := pre.info, pre.rc, pre.tool, pre.toolFound, pre.skip, pre.skipMsg
 	startedAt := time.Now()
 
@@ -624,14 +624,26 @@ func (a *Agent) executeOneToolCall(
 		}
 	}
 
-	// AfterToolCall hook — may override the result. Returning a hook
-	// error aborts the run (caller surfaces the error via yield).
+	// AfterToolCall hook — may override the result. A hook error becomes
+	// an error tool result for THIS call only; the run continues so other
+	// in-flight parallel calls aren't aborted mid-execution. This matches
+	// upstream pi-agent's v0.67.67 fix (#3084) and is consistent with how
+	// we already handle tool-handler errors (a handler that returns err
+	// produces an error tool result rather than aborting the run).
+	//
+	// BeforeToolCall errors still abort the run (see preflight): they run
+	// PRE-execution, so a failed Before hook leaves the agent uncertain
+	// whether to skip or execute. AfterToolCall runs post-execution; the
+	// tool already produced output we can surface.
 	if a.cfg.AfterToolCall != nil {
 		override, err := a.cfg.AfterToolCall(ctx, rc, info, result, isError)
 		if err != nil {
-			return toolOutcome{}, fmt.Errorf("AfterToolCall: %w", err)
-		}
-		if override != nil {
+			result = Result{
+				Summary:         fmt.Sprintf("AfterToolCall hook error: %v", err),
+				FullPayloadHint: result.FullPayloadHint,
+			}
+			isError = true
+		} else if override != nil {
 			result = *override
 		}
 	}
@@ -676,7 +688,7 @@ func (a *Agent) executeOneToolCall(
 			IsError:         isError,
 			FullPayloadHint: result.FullPayloadHint,
 		},
-	}, nil
+	}
 }
 
 // preflight runs the BeforeToolCall hook (if any), resolves the tool
@@ -762,11 +774,7 @@ func (a *Agent) executeToolCallsSequential(
 		emitDelta := func(delta string) {
 			yield(EventToolDelta{ToolCallID: seqCall.ID, Name: seqCall.Name, Delta: delta}, nil)
 		}
-		outcome, err := a.executeOneToolCall(ctx, iteration, call, pre, emitDelta)
-		if err != nil {
-			yield(nil, err)
-			return nil, false
-		}
+		outcome := a.executeOneToolCall(ctx, iteration, call, pre, emitDelta)
 		a.mu.Lock()
 		a.toolLog = append(a.toolLog, outcome.logEntry)
 		a.mu.Unlock()
@@ -818,11 +826,7 @@ func (a *Agent) executeToolCallsParallel(
 			// Skip / unknown — produce the outcome synchronously now so
 			// Phase 2 can drain it through the same channel ordering as
 			// real Handler runs. No Handler runs, so no emitDelta needed.
-			outcome, err := a.executeOneToolCall(ctx, iteration, call, pre, nil)
-			if err != nil {
-				yield(nil, err)
-				return nil, false
-			}
+			outcome := a.executeOneToolCall(ctx, iteration, call, pre, nil)
 			s.immediate = &outcome
 		}
 		slots[i] = s
@@ -870,12 +874,7 @@ func (a *Agent) executeToolCallsParallel(
 			}
 		}
 		g.Go(func() error {
-			outcome, err := a.executeOneToolCall(gctx, iteration, s.call, s.pre, emitDelta)
-			if err != nil {
-				// Returning err cancels gctx; other handlers see the
-				// cancellation. Caller surfaces the error after Wait().
-				return err
-			}
+			outcome := a.executeOneToolCall(gctx, iteration, s.call, s.pre, emitDelta)
 			// Go 1.22+ per-iteration `i` is goroutine-safe — no
 			// `i := i` shadow needed.
 			done <- finished{idx: i, outcome: outcome}

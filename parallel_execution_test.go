@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -474,14 +474,18 @@ func TestParallel_HandlerErrorBecomesIsErrorResultDoesNotAbortRun(t *testing.T) 
 	}
 }
 
-// TestParallel_AfterToolCallHookErrorAbortsRun verifies that a non-nil
-// error from AfterToolCall (hook error, NOT a handler error) DOES
-// terminate the run. errgroup cancels gctx; other handlers see the
-// cancellation and bail.
-func TestParallel_AfterToolCallHookErrorAbortsRun(t *testing.T) {
+// TestParallel_AfterToolCallHookErrorBecomesErrorResultDoesNotAbortRun
+// verifies that a non-nil error from AfterToolCall is converted into
+// an error tool result for THAT call only — other in-flight parallel
+// calls finish normally, and the run continues to the next iteration.
+//
+// Matches upstream pi-agent's v0.67.67 fix (#3084) and our handler-
+// error semantics (handler errors already become error tool results
+// rather than aborting the batch).
+func TestParallel_AfterToolCallHookErrorBecomesErrorResultDoesNotAbortRun(t *testing.T) {
 	tools := []agent.AgentTool{
 		sleepyTool("a", 1*time.Millisecond, "ra"),
-		sleepyTool("b", 100*time.Millisecond, "rb"), // slower; should be cancelled
+		sleepyTool("b", 5*time.Millisecond, "rb"),
 	}
 	fake := &fakeLLM{
 		scripts: [][]llm.StreamEvent{
@@ -489,7 +493,7 @@ func TestParallel_AfterToolCallHookErrorAbortsRun(t *testing.T) {
 				struct{ ID, Name, Args string }{"1", "a", `{}`},
 				struct{ ID, Name, Args string }{"2", "b", `{}`},
 			),
-			textOnlyScript("never reached"),
+			textOnlyScript("recovered"),
 		},
 	}
 	a, _ := agent.New(agent.Config{
@@ -504,12 +508,83 @@ func TestParallel_AfterToolCallHookErrorAbortsRun(t *testing.T) {
 			return nil, nil
 		},
 	})
-	_, err := collect(t, a.Run(context.Background(), "go"))
-	if err == nil {
-		t.Fatal("expected hook error to abort the run; got nil")
+	events, err := collect(t, a.Run(context.Background(), "go"))
+	if err != nil {
+		t.Fatalf("run aborted unexpectedly: %v", err)
 	}
-	if !errorMessageContains(err, "hook explosion") {
-		t.Errorf("error=%v, want it to wrap 'hook explosion'", err)
+
+	var ends []agent.EventToolEnd
+	for _, ev := range events {
+		if e, ok := ev.(agent.EventToolEnd); ok {
+			ends = append(ends, e)
+		}
+	}
+	if len(ends) != 2 {
+		t.Fatalf("got %d EventToolEnd, want 2 (both calls should finalize)", len(ends))
+	}
+	sort.Slice(ends, func(i, j int) bool { return ends[i].ToolCallID < ends[j].ToolCallID })
+	// Call 1: hook errored — IsError=true with the hook error message.
+	if !ends[0].IsError {
+		t.Errorf("call 1: IsError=%v, want true (AfterToolCall errored)", ends[0].IsError)
+	}
+	if !strings.Contains(ends[0].Result, "hook explosion") {
+		t.Errorf("call 1: result=%q, want it to mention 'hook explosion'", ends[0].Result)
+	}
+	// Call 2: hook clean — original tool result surfaces.
+	if ends[1].IsError || ends[1].Result != "rb" {
+		t.Errorf("call 2: IsError=%v Result=%q, want IsError=false Result=rb", ends[1].IsError, ends[1].Result)
+	}
+}
+
+// TestSequential_AfterToolCallHookErrorBecomesErrorResultDoesNotAbortRun
+// verifies the same fix applies in sequential mode — symmetric with
+// parallel. The asymmetry "abort in sequential" wasn't a contract
+// people relied on, and consistency between modes is the more
+// defensible default.
+func TestSequential_AfterToolCallHookErrorBecomesErrorResultDoesNotAbortRun(t *testing.T) {
+	tools := []agent.AgentTool{
+		sleepyTool("a", 1*time.Millisecond, "ra"),
+		sleepyTool("b", 1*time.Millisecond, "rb"),
+	}
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			multiToolCallScript(
+				struct{ ID, Name, Args string }{"1", "a", `{}`},
+				struct{ ID, Name, Args string }{"2", "b", `{}`},
+			),
+			textOnlyScript("recovered"),
+		},
+	}
+	a, _ := agent.New(agent.Config{
+		LLM:   fake,
+		Model: "test",
+		Tools: tools,
+		// default = sequential
+		AfterToolCall: func(_ context.Context, _ agent.RunContext, info agent.ToolCallInfo, _ agent.Result, _ bool) (*agent.Result, error) {
+			if info.ToolCallID == "1" {
+				return nil, errors.New("hook explosion")
+			}
+			return nil, nil
+		},
+	})
+	events, err := collect(t, a.Run(context.Background(), "go"))
+	if err != nil {
+		t.Fatalf("run aborted unexpectedly: %v", err)
+	}
+	var ends []agent.EventToolEnd
+	for _, ev := range events {
+		if e, ok := ev.(agent.EventToolEnd); ok {
+			ends = append(ends, e)
+		}
+	}
+	if len(ends) != 2 {
+		t.Fatalf("got %d EventToolEnd, want 2 (both calls should finalize sequentially)", len(ends))
+	}
+	if !ends[0].IsError || !strings.Contains(ends[0].Result, "hook explosion") {
+		t.Errorf("call 1: IsError=%v Result=%q, want IsError=true with 'hook explosion'", ends[0].IsError, ends[0].Result)
+	}
+	if ends[1].IsError || ends[1].Result != "rb" {
+		t.Errorf("call 2: IsError=%v Result=%q, want IsError=false Result=rb", ends[1].IsError, ends[1].Result)
 	}
 }
 
@@ -697,25 +772,4 @@ func TestParallel_ConsumerAbortCancelsInFlightHandlers(t *testing.T) {
 	if elapsed > 300*time.Millisecond {
 		t.Errorf("consumer abort took %v to return; want < 300ms (in-flight handlers did not unwind)", elapsed)
 	}
-}
-
-// errorMessageContains is a small helper that doesn't depend on
-// strings.Contains being imported in this test file already.
-func errorMessageContains(err error, s string) bool {
-	if err == nil {
-		return false
-	}
-	return fmt.Sprintf("%v", err) != "" && containsSubstr(err.Error(), s)
-}
-
-func containsSubstr(haystack, needle string) bool {
-	if needle == "" {
-		return true
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }
