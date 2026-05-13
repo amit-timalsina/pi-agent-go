@@ -7,6 +7,12 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v0.6.0** shipped 2026-05-13 — Streaming tool progress via
+  `agent.EmitToolDelta(ctx, fragment)` + new `EventToolDelta` variant.
+  Tool handlers surface incremental progress without the model seeing
+  the intermediate fragments. Context-key plumbing keeps the Handler
+  signature unchanged. `Config.ToolDeltaBuffer` (default 64) tunes
+  the parallel-mode delta channel.
 - **v0.5.0** shipped 2026-05-12 — `agent.Restore(cfg, snap)` for
   snapshot-based resume so long-running agents survive process
   restarts. Pluggable `TranscriptStore` interface deferred to a
@@ -25,16 +31,6 @@ Reordering happens when reality changes.
 - **v1.0 ETA:** unknown. v1.0 requires ≥4 weeks production use without
   API churn + at least one external Go consumer driving the loop in a
   real workload.
-
-## Near-term (next 1–3 minor releases)
-
-### v0.6.0 — streaming tool results
-
-- Tool handlers can emit incremental output via a callback parameter
-  before returning, surfacing as `EventToolDelta` events. The model
-  still sees only the final summary, but UIs and observers get
-  per-token progress on long-running tools (shell, sub-agent calls).
-- Mario has the equivalent via `AgentToolResult.details`. Ours doesn't.
 
 ## Mid-term (v0.7+)
 
