@@ -6,7 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.7.1] - 2026-05-14
+## [0.7.2] - 2026-05-14
+
+Republishes v0.7.1's fix with internal product identifiers scrubbed
+from comments + CHANGELOG. v0.7.1 is retracted via `retract` in go.mod.
+No code-behavior change between v0.7.1 and v0.7.2.
+
+### Changed
+
+- **Scrubbed internal product identifiers from public docs**. The
+  bug surface + repro context (adaptive thinking + parallel tool_use
+  on Opus 4.7) remains documented; only proprietary identifiers
+  (project name, dataset codename, run UUIDs) drop.
+
+### Retracted
+
+- v0.7.1 — shipped with internal product identifiers in CHANGELOG +
+  agent.go comments that should not appear in this OSS repo. Use
+  v0.7.2 instead.
+
+## [0.7.1] - 2026-05-14 [RETRACTED]
+
+Retracted via `retract v0.7.1` in go.mod — see v0.7.2.
 
 Defensive fix: nil-block leakage from the streaming accumulator was
 crashing multi-iteration runs with adaptive thinking on Opus 4.7.
