@@ -7,6 +7,15 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v0.7.1** shipped 2026-05-14 — Defensive nil-block filter on
+  `messageAccumulator.final()`. Adaptive thinking + parallel
+  tool_use on Anthropic Opus 4.7 sometimes leaves a Content slot
+  pre-extended by `ensureBlock` but never finalized (Anthropic's
+  stream emits `content_block_start` for "thinking" without the
+  closing `content_block_stop`); downstream providers then crashed
+  next-iteration request build with `unsupported block type <nil>`.
+  Live failure: noumenal_product SAIL dsa-run 019e2720-...,
+  2026-05-14, after 6 LLM iterations + 21 successful tool calls.
 - **v0.7.0** shipped 2026-05-13 — Two ports from upstream pi-agent
   (Mario v0.67.67 + v0.69.0): `Result.Terminate` for batch-wide early
   exit when a tool's output IS the final answer (saves the
