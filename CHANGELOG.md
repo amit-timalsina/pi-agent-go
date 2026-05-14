@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`messageAccumulator.final()` filters nil blocks**. The streaming
+  loop pre-extends `msg.Content` with nils on every `EventXxxStart`
+  so out-of-order End events land at the right index. When a Start
+  fires without a matching End (e.g., Anthropic's streaming sometimes
+  emits `content_block_start` for "thinking" without the closing
+  `content_block_stop` on adaptive-thinking + parallel tool_use
+  flows), the slot stays nil. Downstream providers then reject the
+  nil block at convert time with `unsupported block type <nil>`,
+  breaking the next iteration's request build. final() now strips
+  nil entries while preserving the order of finalized blocks. Live
+  failure that motivated the fix: noumenal_product SAIL dsa-run
+  019e2720-..., 2026-05-14, where Opus 4.7 emitted a thinking block
+  + 16 parallel tool_use blocks on iter 6 and iter 7 failed at
+  request build because one slot was nil.
+
 ## [0.7.0] - 2026-05-13
 
 Two changes ported from upstream pi-agent (Mario Zechner, TS): a bug
