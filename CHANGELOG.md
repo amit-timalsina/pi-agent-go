@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-14
+
+Defensive fix: nil-block leakage from the streaming accumulator was
+crashing multi-iteration runs with adaptive thinking on Opus 4.7.
+
 ### Fixed
 
 - **`messageAccumulator.final()` filters nil blocks**. The streaming
