@@ -99,4 +99,3 @@ func TestMessageAccumulator_FinalEmptyContentUntouched(t *testing.T) {
 		t.Errorf("empty Content should stay empty, got len=%d", len(final.Content))
 	}
 }
-
