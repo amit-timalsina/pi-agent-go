@@ -22,11 +22,10 @@ crashing multi-iteration runs with adaptive thinking on Opus 4.7.
   flows), the slot stays nil. Downstream providers then reject the
   nil block at convert time with `unsupported block type <nil>`,
   breaking the next iteration's request build. final() now strips
-  nil entries while preserving the order of finalized blocks. Live
-  failure that motivated the fix: noumenal_product SAIL dsa-run
-  019e2720-..., 2026-05-14, where Opus 4.7 emitted a thinking block
-  + 16 parallel tool_use blocks on iter 6 and iter 7 failed at
-  request build because one slot was nil.
+  nil entries while preserving the order of finalized blocks.
+  Failure that motivated the fix (2026-05-14): Opus 4.7 emitted a
+  thinking block + ~16 parallel tool_use blocks in a single response;
+  the next iteration's request-build failed because one slot was nil.
 
 ## [0.7.0] - 2026-05-13
 

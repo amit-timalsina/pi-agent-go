@@ -14,8 +14,8 @@ Reordering happens when reality changes.
   stream emits `content_block_start` for "thinking" without the
   closing `content_block_stop`); downstream providers then crashed
   next-iteration request build with `unsupported block type <nil>`.
-  Live failure: noumenal_product SAIL dsa-run 019e2720-...,
-  2026-05-14, after 6 LLM iterations + 21 successful tool calls.
+  Reported in production 2026-05-14 on a multi-iteration agent run
+  with ~16 parallel tool calls in a single response.
 - **v0.7.0** shipped 2026-05-13 — Two ports from upstream pi-agent
   (Mario v0.67.67 + v0.69.0): `Result.Terminate` for batch-wide early
   exit when a tool's output IS the final answer (saves the

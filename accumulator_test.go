@@ -12,10 +12,10 @@ import (
 // message. Downstream providers (e.g., Anthropic) reject nil blocks
 // with "unsupported block type <nil>" at convert time.
 //
-// Live failure that motivated the fix: noumenal_product SAIL
-// dsa-run 019e2720-..., 2026-05-14, where adaptive thinking +
-// parallel tool_use on Opus 4.7 left an unfilled slot after 6 LLM
-// iterations; iter 7's request-build crashed on the nil.
+// Failure that motivated the fix (2026-05-14): adaptive thinking +
+// parallel tool_use on Opus 4.7 left an unfilled slot after several
+// LLM iterations; the next iteration's request-build crashed on the
+// nil.
 func TestMessageAccumulator_FinalDropsNilBlocks(t *testing.T) {
 	a := newMessageAccumulator()
 	a.ensureBlock(3) // pre-extend with 4 nil slots

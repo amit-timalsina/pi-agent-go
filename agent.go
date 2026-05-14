@@ -1200,9 +1200,9 @@ func (a *messageAccumulator) ensureBlock(idx int) {
 // content_block_stop), the slot stays nil. Downstream providers
 // reject nil blocks at the convert step with "unsupported block type
 // <nil>", which breaks the next iteration's request build — symptom
-// hit in production with adaptive thinking + parallel tool_use on
-// Opus 4.7 (live failure: noumenal_product SAIL dsa-run
-// 019e2720-..., 2026-05-14, after 6 LLM iterations).
+// reported in production with adaptive thinking + parallel tool_use
+// on Opus 4.7 (2026-05-14, multi-iteration agent run with ~16
+// parallel tool calls in a single response).
 //
 // Filtering here is defensive — the right long-term fix is to ensure
 // every Start has a matching End on the provider side, but a nil
