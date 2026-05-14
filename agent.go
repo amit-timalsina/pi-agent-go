@@ -1191,6 +1191,46 @@ func (a *messageAccumulator) ensureBlock(idx int) {
 	}
 }
 
+// final returns the accumulated assistant message with any unfilled
+// (nil) Content slots filtered out. ensureBlock pre-extends Content
+// with nils on every EventXxxStart so out-of-order End events can
+// land at the right index; if a Start fires but the matching End
+// never arrives (e.g., a streaming edge case where Anthropic emits a
+// content_block_start for "thinking" without the closing
+// content_block_stop), the slot stays nil. Downstream providers
+// reject nil blocks at the convert step with "unsupported block type
+// <nil>", which breaks the next iteration's request build — symptom
+// hit in production with adaptive thinking + parallel tool_use on
+// Opus 4.7 (live failure: noumenal_product SAIL dsa-run
+// 019e2720-..., 2026-05-14, after 6 LLM iterations).
+//
+// Filtering here is defensive — the right long-term fix is to ensure
+// every Start has a matching End on the provider side, but a nil
+// slot should never crash the agent loop. Block order among
+// non-nil entries is preserved.
 func (a *messageAccumulator) final() llm.Message {
-	return a.msg
+	out := a.msg
+	if hasNilBlock(out.Content) {
+		filtered := make([]llm.Block, 0, len(out.Content))
+		for _, b := range out.Content {
+			if b == nil {
+				continue
+			}
+			filtered = append(filtered, b)
+		}
+		out.Content = filtered
+	}
+	return out
+}
+
+// hasNilBlock returns true if any element of blocks is a nil
+// interface value. Separate from final() so the happy path (no nils,
+// the overwhelmingly common case) doesn't allocate a new slice.
+func hasNilBlock(blocks []llm.Block) bool {
+	for _, b := range blocks {
+		if b == nil {
+			return true
+		}
+	}
+	return false
 }
