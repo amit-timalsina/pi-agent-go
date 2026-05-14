@@ -7,7 +7,12 @@ Reordering happens when reality changes.
 
 ## Status
 
-- **v0.7.1** shipped 2026-05-14 — Defensive nil-block filter on
+- **v0.7.2** shipped 2026-05-14 — Republishes v0.7.1's nil-block fix
+  with internal product identifiers scrubbed from comments +
+  CHANGELOG. v0.7.1 is retracted (Go proxy had cached it before the
+  scrub PR landed). No code-behavior change between v0.7.1 and
+  v0.7.2.
+- **v0.7.1** shipped 2026-05-14 [RETRACTED] — Defensive nil-block filter on
   `messageAccumulator.final()`. Adaptive thinking + parallel
   tool_use on Anthropic Opus 4.7 sometimes leaves a Content slot
   pre-extended by `ensureBlock` but never finalized (Anthropic's
