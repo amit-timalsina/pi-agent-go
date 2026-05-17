@@ -7,6 +7,13 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v0.8.0** shipped 2026-05-17 — Forwards `Config.CacheRetention`
+  into every iteration's `llm.Request`. Closes #25 — Anthropic
+  prompt caching (single highest cost lever for tool-heavy agents,
+  ~10× input-rate reduction on cache hits) is now reachable from
+  pi-agent-go callers. First issue raised by consumer-driven
+  production use; matches the "real consumer surfacing real bugs"
+  v1.0-gate signal.
 - **v0.7.2** shipped 2026-05-14 — Republishes v0.7.1's nil-block fix
   with internal product identifiers scrubbed from comments +
   CHANGELOG. v0.7.1 is retracted (Go proxy had cached it before the
