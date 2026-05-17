@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`Config.CacheRetention llm.CacheRetention`** — forwards to
+  `llm.Request.CacheRetention` on every iteration. Closes issue #25.
+  Without this, Anthropic prompt caching (pi-llm-go's
+  `CacheRetentionLong`, ~10× input-rate reduction after the first
+  cache hit) was unreachable from pi-agent-go callers, even though
+  the underlying provider fully supported it. Zero value
+  (`CacheRetentionNone`) preserves the no-cache default — fully
+  backward compatible.
+  - Caller responsibility documented on the field: cached prefix must
+    be byte-stable across iterations. The agent loop already
+    preserves system + tools across iterations; consumers that mutate
+    dynamic state should keep it in trailing messages (via
+    `TransformContext`), not in the system prompt or tool
+    descriptions.
+  - Three unit tests cover the forwarding (every iteration carries
+    the value; zero-value path; Short tier also forwarded — guards
+    against a hypothetical "only Long forwarded" regression).
+
 ## [0.7.2] - 2026-05-14
 
 Republishes v0.7.1's fix with internal product identifiers scrubbed

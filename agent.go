@@ -124,6 +124,24 @@ type Config struct {
 	MaxTokens   int
 	Thinking    *llm.ThinkingConfig
 
+	// CacheRetention controls Anthropic prompt caching on every iteration.
+	// Forwarded as-is to llm.Request.CacheRetention. Zero value
+	// (CacheRetentionNone) preserves the no-cache default. See the
+	// llm.CacheRetention godoc for the placement contract and TTL
+	// trade-offs; the practical impact in agent loops is that a large
+	// stable prefix (system prompt + tool schemas) bills at ~0.1× input
+	// rate after the first hit when CacheRetentionLong is set —
+	// typically a ~10× cost reduction on the dominant input-token cost
+	// for tool-heavy agents (closes #25).
+	//
+	// Caller responsibility: the cached prefix must be byte-stable
+	// across iterations to hit the cache. The agent loop already
+	// preserves system + tools across iterations; consumers that mutate
+	// dynamic state should keep it in TRAILING messages (e.g. via
+	// TransformContext appending a synthetic state message), not in the
+	// system prompt or tool descriptions.
+	CacheRetention llm.CacheRetention
+
 	// Optional hooks. nil means "no-op."
 	//
 	// Concurrency: under ToolExecution = ToolExecutionParallel,
@@ -1061,13 +1079,14 @@ func (a *Agent) buildRequest(ctx context.Context) (llm.Request, error) {
 	}
 
 	return llm.Request{
-		Model:       a.cfg.Model,
-		System:      system,
-		Messages:    msgs,
-		Tools:       tools,
-		Temperature: a.cfg.Temperature,
-		MaxTokens:   a.cfg.MaxTokens,
-		Thinking:    a.cfg.Thinking,
+		Model:          a.cfg.Model,
+		System:         system,
+		Messages:       msgs,
+		Tools:          tools,
+		Temperature:    a.cfg.Temperature,
+		MaxTokens:      a.cfg.MaxTokens,
+		Thinking:       a.cfg.Thinking,
+		CacheRetention: a.cfg.CacheRetention,
 	}, nil
 }
 
