@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-17
+
+Forwards `CacheRetention` from `agent.Config` into every iteration's
+`llm.Request`. Closes #25 — the single highest cost lever for
+tool-heavy agents (Anthropic prompt caching, ~10× input-rate
+reduction after the first cache hit) is now reachable from
+pi-agent-go callers without a fork.
+
 ### Added
 
 - **`Config.CacheRetention llm.CacheRetention`** — forwards to
@@ -449,7 +457,9 @@ four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.7.2...v0.8.0
+[0.7.2]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.7.0...v0.7.2
 [0.7.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.4.0...v0.5.0
