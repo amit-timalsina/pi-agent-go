@@ -77,6 +77,15 @@ func main() {
 		SystemPrompt: "You are a helpful assistant. Use tools when needed.",
 		Tools:        []agent.AgentTool{timeTool},
 		MaxTokens:    1024,
+		// CacheRetention enables Anthropic prompt caching. For tool-heavy
+		// agents this is the single highest cost lever: the stable
+		// prefix (system + tool schemas) bills at ~0.1× input rate after
+		// the first hit. CacheRetentionLong = 1h TTL; CacheRetentionShort
+		// = 5m. Leave unset (CacheRetentionNone) when targeting models
+		// that don't benefit (OpenAI Chat is automatic; Gemini ignores).
+		// Cached prefix MUST be byte-stable across iterations to hit —
+		// keep dynamic state in trailing messages, not in SystemPrompt.
+		CacheRetention: llm.CacheRetentionLong,
 		BeforeToolCall: func(ctx context.Context, rc agent.RunContext, call agent.ToolCallInfo) (bool, string, error) {
 			fmt.Fprintf(os.Stderr, "[iter %d] calling %s(%s)\n", rc.Iteration, call.Name, string(call.Arguments))
 			return false, "", nil
