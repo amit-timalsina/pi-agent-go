@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `github.com/amit-timalsina/pi-llm-go` `v0.11.2` → `v1.0.0`
+  (lockstep with the LLM client's first stable release; no API change).
+
 ## [1.0.0] - 2026-06-06
 
 First **stable** release. No code changes vs `0.8.0` — this tag is the
