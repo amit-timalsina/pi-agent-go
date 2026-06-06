@@ -6,6 +6,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-06
+
+First **stable** release. No code changes vs `0.8.0` — this tag is the
+API-stability commitment plus a documentation feature-coverage pass.
+
+The loop API has been **additive-only since 0.2.0** (new optional
+`Config` fields and `AgentEvent` variants only, no breaking churn) and
+dogfooded in production at Noumenal — the Actioning Agent drives the
+loop. From here the package follows
+[Semantic Versioning](https://semver.org/) strictly: no breaking change
+ships without a major-version (module-path) bump per Go's
+[major-version policy](https://go.dev/blog/v2-go-modules). New optional
+`Config` fields, new `AgentEvent` variants, and new methods on concrete
+types are minor releases; adding a method to a public interface would be
+major.
+
+The self-imposed "≥1 external Go consumer driving the loop" gate is
+**waived** — the Noumenal Actioning Agent in production is the adoption
+signal.
+
+This release still depends on `pi-llm-go v0.11.2`; the bump to
+`pi-llm-go v1.0.0` lands as a separate deps PR per the lockstep
+convention.
+
+### Changed
+
+- **Stability promise:** pre-1.0 → strict semver. See `ROADMAP.md` for
+  the closed v1.0 readiness checklist.
+
+### Documentation
+
+- README: status flipped to v1.0.0/stable; capability matrix and
+  Features document `Config.CacheRetention` (Anthropic prompt caching
+  across iterations), `Config.TransformContext` (per-iteration message
+  transform), and `SetSystemPrompt` / `SystemPrompt` (dynamic prompt);
+  Examples section lists all nine programs; versioning section rewritten
+  for the semver commitment.
+- `llms.txt`: adds `Config.CacheRetention`, `DefaultMaxSummarySize`,
+  the `Agent` method list, `Result.Terminate`, and the `terminate_early`
+  example; versioning section updated.
+
 ## [0.8.0] - 2026-05-17
 
 Forwards `CacheRetention` from `agent.Config` into every iteration's

@@ -10,9 +10,7 @@ Depends on pi-llm-go's `LLM` interface — track its API and bump in lockstep.
 
 ## Stability
 
-- **Pre-1.0 today.** API may change between minor versions; CHANGELOG documents every change.
-- v1.0 lands once the agent has driven real production work for ≥4 weeks without API churn.
-- Post-1.0: strict semver. Adding a new method to a public interface is a major bump; new structs / new functions / new optional config fields are minor.
+- **v1.0.0 — stable (since 2026-06-06).** Strict semver: the exported API is frozen; breaking changes require a `vN+1` module-path bump per Go's major-version policy. Adding a method to a public interface is a major bump; new structs / new functions / new optional `Config` fields / new `AgentEvent` variants are minor; bugfixes are patches. CHANGELOG documents every change.
 
 ## Hard rules
 
@@ -20,7 +18,7 @@ Depends on pi-llm-go's `LLM` interface — track its API and bump in lockstep.
 - **Push, force-push, repo-creation, opening PRs require explicit human OK.** Atomic commits are local-by-default.
 - **One Agent value, one consumer.** `Agent.Run` is not safe for concurrent calls. Callers wanting parallel sessions instantiate multiple Agents. `Steer()` and `Snapshot()` are the only methods safe from other goroutines while `Run` is in progress.
 - **Hook surface is intentionally minimal.** Three hooks only (`BeforeToolCall`, `AfterToolCall`, `OnSteering`). Resist adding more without a concrete use case from a real consumer. Upstream pi-agent (TS) has eight; we chose the smallest workable subset and have lived to defend it.
-- **Sequential tool execution at v1.** Parallel is an additive future PR via a `Config.ToolExecution` field (default `Sequential`, opt-in `Parallel`). Implementation will use `errgroup.Group` with results reassembled in source order.
+- **Sequential tool execution is the default.** Parallel is opt-in via `Config.ToolExecution = ToolExecutionParallel` (shipped v0.3.0; `errgroup.Group` with `tool_result` blocks reassembled in source order). The default stays `Sequential` — do not flip it.
 
 ## Code conventions
 
