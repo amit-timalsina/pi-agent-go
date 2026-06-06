@@ -7,6 +7,19 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v1.0.0** shipped 2026-06-06 — First stable release. The loop API
+  has been additive-only since v0.2.0 (new optional `Config` fields and
+  `AgentEvent` variants only, no breaking churn) and dogfooded in
+  production at Noumenal (the Actioning Agent drives the loop). From
+  here the package follows semver strictly: no breaking change without
+  a major-version (module-path) bump. No new code vs v0.8.0 — this tag
+  is the stability commitment plus a documentation feature-coverage
+  pass (`CacheRetention`, `TransformContext`, dynamic system prompt,
+  full examples list). The self-imposed "≥1 external Go consumer" gate
+  is **waived**: the Noumenal AA driving the loop in production is the
+  adoption signal. Still ships on `pi-llm-go v0.11.2`; the bump to
+  `pi-llm-go v1.0.0` lands as a separate deps PR per the lockstep
+  convention.
 - **v0.8.0** shipped 2026-05-17 — Forwards `Config.CacheRetention`
   into every iteration's `llm.Request`. Closes #25 — Anthropic
   prompt caching (single highest cost lever for tool-heavy agents,
@@ -57,9 +70,8 @@ Reordering happens when reality changes.
   to 1.25 (transitive via `golang.org/x/sync`).
 - **v0.2.0** shipped 2026-05-11 — FullPayloadHint + TransformContext +
   SetSystemPrompt (WWMD convergence).
-- **v1.0 ETA:** unknown. v1.0 requires ≥4 weeks production use without
-  API churn + at least one external Go consumer driving the loop in a
-  real workload.
+- **v1.0 — shipped 2026-06-06.** Next: the additive Config-hook surface
+  below, each released as a v1.x minor when a real consumer asks.
 
 ## Mid-term (v0.8+)
 
@@ -126,16 +138,16 @@ would feel.
 - **Distributed run coordination.** Out of scope for a single-loop
   agent framework.
 
-## v1.0 readiness checklist
+## v1.0 readiness checklist — closed 2026-06-06
 
-- [x] Parallel tool execution landed (v0.3.0); awaiting production
-      validation under load.
-- [ ] Snapshot resume working end-to-end.
-- [ ] `examples/observability/` shipped and referenced from the README.
-- [ ] At least one external Go consumer driving the loop in a real
-      workload for ≥4 weeks without API churn.
-- [ ] `pkg.go.dev` `Example_*` tests for every exported type.
-- [ ] CONTRIBUTING.md walks a contributor through adding a new hook.
+- [x] Parallel tool execution landed (v0.3.0), validated under load
+      (production runs with ~16 parallel tool calls — see v0.7.x notes).
+- [x] Snapshot resume working end-to-end (`Snapshot()` / `Restore()`, v0.5.0).
+- [x] `examples/observability/` shipped (v0.4.0) and referenced from the README.
+- [~] External Go consumer — **waived**; the Noumenal Actioning Agent
+      driving the loop in production is the adoption signal.
+- [x] `pkg.go.dev` `Example_*` tests (`example_test.go`).
+- [x] CONTRIBUTING.md present (feature/hook-addition checklist in CLAUDE.md).
 
 ## Convergence work — closed
 

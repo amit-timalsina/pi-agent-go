@@ -7,7 +7,7 @@
 
 **Minimal Go agent framework for LLM tool-calling loops.** Single-loop agent on top of [`pi-llm-go`](https://github.com/amit-timalsina/pi-llm-go): input → optional tool calls → response → repeat until done. Typed tool handlers with reflection-derived JSON schemas, parallel tool execution, three hooks for control, streaming tool progress, mid-run steering, snapshot-based resume. Works with **Anthropic Claude**, **OpenAI** (GPT-5 family), **Google Gemini**, and any OpenAI-compatible endpoint through pi-llm-go.
 
-> Status: **v0.6.0, pre-1.0.** API may change between minor versions; see [CHANGELOG.md](CHANGELOG.md). Used internally at [Noumenal](https://noumenalai.com).
+> Status: **v1.0.0 — stable.** The public API follows [semver](https://semver.org/): no breaking changes without a major (module-path) bump. See [CHANGELOG.md](CHANGELOG.md). Dogfooded in production at [Noumenal](https://noumenalai.com).
 
 ## Install
 
@@ -29,6 +29,9 @@ Requires Go 1.25+ (transitively, via `golang.org/x/sync`).
 | Batch early-exit (`Result.Terminate`) — skip the follow-up LLM call when a tool's output IS the final answer | ✅ |
 | Three hooks: `BeforeToolCall`, `AfterToolCall`, `OnSteering` | ✅ |
 | Mid-run steering (`Steer(ctx, msg)`) | ✅ |
+| Per-iteration context transform (`Config.TransformContext`) | ✅ |
+| Anthropic prompt caching across iterations (`Config.CacheRetention`) | ✅ |
+| Dynamic system prompt (`SetSystemPrompt` / `SystemPrompt`) | ✅ |
 | Snapshot resume (`Snapshot()` / `Restore()`) | ✅ |
 | Iterator-based events (`iter.Seq2[AgentEvent, error]`) | ✅ |
 | Cancellation via `context.Context` | ✅ |
@@ -103,6 +106,9 @@ func main() {
 - **Typed tools.** `Typed[I, O](name, desc, handler, serialize)` derives the JSON Schema from `I` and decodes raw arguments into the typed input. `Raw(...)` for when you need to ship a hand-written schema.
 - **Three hooks.** `BeforeToolCall` (skip with custom error result), `AfterToolCall` (override result), `OnSteering` (drop or rewrite injected messages). Synchronous, error-returning.
 - **Steering channel.** `Steer(ctx, msg)` injects a user message; drained at the next iteration boundary. Buffered (capacity 16).
+- **Prompt caching across iterations.** `Config.CacheRetention` is forwarded as-is into every iteration's `llm.Request` — the single highest cost lever for tool-heavy agents (~10× input-rate reduction on Anthropic cache hits). `Config.CacheRetention = llm.CacheRetentionLong` for the 1h TTL.
+- **Per-iteration context transform.** `Config.TransformContext(ctx, msgs) ([]llm.Message, error)` runs at the top of every iteration to mutate the message slice sent to the LLM — context-window pruning, summarization, or late synthetic-message injection — without touching the durable transcript. Returning an error aborts the run as `ErrTransformContext`.
+- **Dynamic system prompt.** `SetSystemPrompt(s)` / `SystemPrompt()` evolve the system prompt on a long-running agent between turns (e.g. from a hook or `TransformContext`).
 - **Snapshot.** `Snapshot()` returns an immutable view of state for cross-goroutine observation.
 - **Production-friendly errors.** Hook errors abort the run; tool errors flow back to the model as `ToolResultBlock{IsError: true}` (the model can recover).
 
@@ -195,22 +201,23 @@ JSON support lands in a future pi-llm-go release. See
 [`examples/snapshot_resume`](examples/snapshot_resume) for the
 end-to-end pattern.
 
-## Example
+## Examples
 
-`examples/hello_agent` is a runnable demo against the real Anthropic API:
+Runnable programs in `examples/` (set `ANTHROPIC_API_KEY` first, e.g. `go run ./examples/hello_agent`):
 
-```bash
-export ANTHROPIC_API_KEY=...
-go run ./examples/hello_agent
-```
-
-It registers a `get_current_time` tool and asks the model what time it is in two timezones — exercising multi-call iterations.
+- `examples/hello_agent` — `get_current_time` tool across two timezones; exercises multi-call iterations.
+- `examples/multi_tool` — several typed tools registered on one agent.
+- `examples/with_hooks` — `BeforeToolCall` / `AfterToolCall` / `OnSteering` in action.
+- `examples/steering` — mid-run `Steer(ctx, msg)` injection from another goroutine.
+- `examples/streaming_tool` — `EmitToolDelta` surfacing incremental tool progress via `EventToolDelta`.
+- `examples/terminate_early` — `Result.Terminate` skipping the follow-up LLM call when a tool's output is the final answer.
+- `examples/bounded_results` — `Result.Summary` + `FullPayloadHint` bounding large tool outputs.
+- `examples/snapshot_resume` — `Snapshot()` / `Restore()` surviving a process restart.
+- `examples/observability` — `log/slog` wired over the `AgentEvent` iterator + the three hooks, with markers for OpenTelemetry spans.
 
 ## Versioning
 
-Pre-1.0. Anything can change between minor versions; refer to [CHANGELOG.md](CHANGELOG.md).
-
-v1.0 lands once the agent has driven real production work for ≥4 weeks without API churn. Post-1.0 is strict semver.
+As of **v1.0.0** this package follows [semver](https://semver.org/) strictly: the exported API is stable, and no breaking change ships without a major-version (module-path) bump per Go's [major-version policy](https://go.dev/blog/v2-go-modules). New optional `Config` fields, new `AgentEvent` variants, and new methods on concrete types are minor releases; adding a method to a public interface would be a major. See [CHANGELOG.md](CHANGELOG.md) for each release.
 
 ## License
 

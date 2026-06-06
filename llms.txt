@@ -11,9 +11,10 @@ go get github.com/amit-timalsina/pi-agent-go
 ## Core types
 
 - `agent.Agent` — owns the loop. Created via `New(Config)`; driven via `Run(ctx, prompt)` or `RunMessage(ctx, llm.Message)`.
-- `agent.Config` — `LLM`, `Model`, `SystemPrompt`, `Tools`, `MaxIterations`, `Temperature`, `MaxTokens`, `Thinking`, hooks, `ToolExecution`, `ToolDeltaBuffer`, `TransformContext`.
+- `agent.Config` — `LLM`, `Model`, `SystemPrompt`, `Tools`, `MaxIterations`, `Temperature`, `MaxTokens`, `Thinking`, `CacheRetention` (forwarded to every iteration's `llm.Request` for Anthropic prompt caching), hooks, `ToolExecution`, `ToolDeltaBuffer`, `DefaultMaxSummarySize`, `TransformContext` (per-iteration message-slice transform).
+- `agent.Agent` methods — `Run` / `RunMessage`, `Steer`, `Snapshot`, `Reset`, `SetSystemPrompt` / `SystemPrompt` (dynamic prompt for long-running agents).
 - `agent.AgentTool` — embeds `llm.Tool` + a `Handler`. Constructed via `agent.Typed[I, O]` (schema from reflection) or `agent.Raw` (hand-written schema).
-- `agent.Result` — what a tool handler returns: `Summary` (text the model sees, bounded by MaxSummarySize) + optional `FullPayloadHint` (caller-defined locator the model can retrieve later).
+- `agent.Result` — what a tool handler returns: `Summary` (text the model sees, bounded by MaxSummarySize), optional `FullPayloadHint` (caller-defined locator the model can retrieve later), and `Terminate` (skip the follow-up LLM call when the tool's output IS the final answer; AND-reduced across a parallel batch).
 - `agent.AgentEvent` — sealed sum emitted by `Run`: `EventRunStart`, `EventIterationStart`, `EventLLMStream`, `EventAssistantMessage`, `EventSteering`, `EventToolStart`, `EventToolDelta`, `EventToolEnd`, `EventRunEnd`.
 
 ## Hooks
@@ -125,12 +126,13 @@ agent.Typed[Args, Out]("name", "...",
 - [examples/steering](examples/steering) — `Steer()` injecting mid-run messages.
 - [examples/snapshot_resume](examples/snapshot_resume) — `Snapshot()` + `Restore()` across a simulated process restart.
 - [examples/bounded_results](examples/bounded_results) — `MaxSummarySize` + `FullPayloadHint` for tools with large outputs.
+- [examples/terminate_early](examples/terminate_early) — `Result.Terminate` skipping the follow-up LLM call.
 - [examples/observability](examples/observability) — OpenTelemetry span + slog wiring over the AgentEvent iterator.
 - [examples/streaming_tool](examples/streaming_tool) — `EmitToolDelta` surfacing tool progress.
 
 ## Versioning and stability
 
-Pre-1.0 (v0.x). API may change between minor versions; every change documented in CHANGELOG.md. v1.0 lands when the loop has driven real production work for ≥4 weeks without churn. Used internally at Noumenal as of May 2026.
+Stable as of **v1.0.0**. Follows semver strictly: no breaking change without a major-version (module-path) bump per Go's major-version policy. New optional `Config` fields, new `AgentEvent` variants, and new methods on concrete types are minor releases; adding a method to a public interface would be major. Every change documented in CHANGELOG.md. Dogfooded in production at Noumenal since May 2026 (additive-only API since v0.2.0).
 
 ## License
 
