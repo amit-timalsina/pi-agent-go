@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/amit-timalsina/pi-llm-go v1.0.0
 	github.com/invopop/jsonschema v0.14.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.21.0
 )
 
 require (
