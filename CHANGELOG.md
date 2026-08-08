@@ -6,10 +6,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-04
+
+### Fixed
+
+- **`Agent.Run` no longer panics on an unmatched `EventToolCallEnd`.** A
+  provider emitting `EventToolCallEnd` for a block that no
+  `EventToolCallStart` opened indexed past the end of `Content` inside
+  `messageAccumulator.apply`, taking down the host process mid-run:
+
+  ```
+  event=agent.EventRunStart       err=<nil>
+  event=agent.EventIterationStart err=<nil>
+  event=agent.EventLLMStream      err=<nil>
+  event=agent.EventLLMStream      err=<nil>
+  panic: runtime error: index out of range [0] with length 0
+  ```
+
+  `EventToolCallEnd` was the only End case that skipped the guard its three
+  siblings already use — a builder/metadata lookup that doubles as proof
+  the matching Start ran. It now returns `llm.ErrMalformedStream`, which
+  `runIteration` surfaces through the run iterator, so callers branch with
+  `errors.Is` instead of recovering from a panic. Closes [#40].
+
+  The same guard closes a silent variant: an End whose index was *in* range
+  but held another block kind overwrote it with a nameless `ToolCallBlock`,
+  destroying a completed text answer and then dispatching as an unknown
+  tool.
+
 ### Changed
 
-- Bump `github.com/amit-timalsina/pi-llm-go` `v0.11.2` → `v1.0.0`
-  (lockstep with the LLM client's first stable release; no API change).
+- Bump `github.com/amit-timalsina/pi-llm-go` `v1.1.0` → `v1.3.0` — brings
+  `ErrMalformedStream` (the sentinel this release returns) plus
+  `Usage.ReasoningTokens`, OpenAI cached-input telemetry, and the
+  Responses-API tool-call replay fix. The identical accumulator bug in
+  `llm.Accumulate` is fixed there, so a direct `llm.Complete` caller is
+  covered too.
+
+[#40]: https://github.com/amit-timalsina/pi-agent-go/issues/40
 
 ## [1.0.0] - 2026-06-06
 
@@ -503,7 +537,9 @@ four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/amit-timalsina/pi-agent-go/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.7.0...v0.7.2
 [0.7.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.6.0...v0.7.0

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 
 	llm "github.com/amit-timalsina/pi-llm-go"
@@ -97,5 +99,76 @@ func TestMessageAccumulator_FinalEmptyContentUntouched(t *testing.T) {
 	final := a.final()
 	if len(final.Content) != 0 {
 		t.Errorf("empty Content should stay empty, got len=%d", len(final.Content))
+	}
+}
+
+// Past Content's end used to panic the host process; in range over another
+// kind used to clobber it silently.
+func TestMessageAccumulator_UnmatchedToolCallEnd(t *testing.T) {
+	cases := []struct {
+		name   string
+		events []llm.StreamEvent
+	}{
+		{
+			name: "index past end of content",
+			events: []llm.StreamEvent{
+				llm.EventMessageStart{Model: "m"},
+				llm.EventToolCallEnd{BlockIndex: 0, Arguments: json.RawMessage(`{"a":1}`)},
+			},
+		},
+		{
+			name: "index over a finished text block",
+			events: []llm.StreamEvent{
+				llm.EventMessageStart{Model: "m"},
+				llm.EventTextStart{BlockIndex: 0},
+				llm.EventTextDelta{BlockIndex: 0, Delta: "answer"},
+				llm.EventTextEnd{BlockIndex: 0},
+				llm.EventToolCallEnd{BlockIndex: 0, Arguments: json.RawMessage(`{"a":1}`)},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newMessageAccumulator()
+			var gotErr error
+			for _, ev := range tc.events {
+				if err := a.apply(ev); err != nil {
+					gotErr = err
+					break
+				}
+			}
+			if gotErr == nil {
+				t.Fatalf("want ErrMalformedStream, got nil (content=%v)", a.final().Content)
+			}
+			if !errors.Is(gotErr, llm.ErrMalformedStream) {
+				t.Errorf("errors.Is(err, llm.ErrMalformedStream)=false: %v", gotErr)
+			}
+		})
+	}
+}
+
+// A well-formed tool call must still accumulate.
+func TestMessageAccumulator_WellFormedToolCallUnaffected(t *testing.T) {
+	a := newMessageAccumulator()
+	events := []llm.StreamEvent{
+		llm.EventMessageStart{Model: "m"},
+		llm.EventToolCallStart{BlockIndex: 0, ID: "tu_1", Name: "echo"},
+		llm.EventToolCallDelta{BlockIndex: 0, Delta: `{"text":"hi"}`},
+		llm.EventToolCallEnd{BlockIndex: 0, Arguments: json.RawMessage(`{"text":"hi"}`)},
+		llm.EventMessageEnd{StopReason: llm.StopReasonToolUse},
+	}
+	for _, ev := range events {
+		if err := a.apply(ev); err != nil {
+			t.Fatalf("apply(%T): %v", ev, err)
+		}
+	}
+	final := a.final()
+	tc, ok := final.Content[0].(llm.ToolCallBlock)
+	if !ok {
+		t.Fatalf("Content[0]=%T, want ToolCallBlock", final.Content[0])
+	}
+	if tc.ID != "tu_1" || tc.Name != "echo" || string(tc.Arguments) != `{"text":"hi"}` {
+		t.Errorf("ToolCallBlock=%+v", tc)
 	}
 }
