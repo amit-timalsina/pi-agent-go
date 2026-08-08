@@ -7,6 +7,13 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v1.0.1** shipped 2026-08-04 — `Agent.Run` returns
+  `llm.ErrMalformedStream` instead of panicking when a provider emits an
+  `EventToolCallEnd` for a block no `EventToolCallStart` opened. Closes
+  #40 — provider event ordering could take down the host process, and an
+  in-range variant silently overwrote a finished text block with a
+  nameless tool call. Ships on `pi-llm-go v1.3.0`, where the same bug in
+  `llm.Accumulate` is fixed for direct `Complete` callers.
 - **v1.0.0** shipped 2026-06-06 — First stable release. The loop API
   has been additive-only since v0.2.0 (new optional `Config` fields and
   `AgentEvent` variants only, no breaking churn) and dogfooded in

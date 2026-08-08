@@ -523,7 +523,10 @@ func (a *Agent) runIteration(
 		if !yield(EventLLMStream{Iteration: iteration, Event: ev}, nil) {
 			return llm.Message{}, false
 		}
-		acc.apply(ev)
+		if err := acc.apply(ev); err != nil {
+			yield(nil, err)
+			return llm.Message{}, false
+		}
 	}
 	msg := acc.final()
 	a.mu.Lock()
@@ -1150,7 +1153,10 @@ func newMessageAccumulator() *messageAccumulator {
 	}
 }
 
-func (a *messageAccumulator) apply(event llm.StreamEvent) {
+// apply folds one event into the message. It returns an error only for a
+// stream that breaks the Start→Delta→End block contract; a malformed
+// stream must surface to the caller rather than panic the host process.
+func (a *messageAccumulator) apply(event llm.StreamEvent) error {
 	switch e := event.(type) {
 	case llm.EventMessageStart:
 		a.msg.Model = e.Model
@@ -1188,7 +1194,13 @@ func (a *messageAccumulator) apply(event llm.StreamEvent) {
 			b.WriteString(e.Delta)
 		}
 	case llm.EventToolCallEnd:
-		meta := a.toolCallMetadata[e.BlockIndex]
+		// Metadata exists only if Start opened this block — without it the
+		// index may be past Content's end or hold another kind.
+		meta, ok := a.toolCallMetadata[e.BlockIndex]
+		if !ok {
+			return fmt.Errorf("%w: EventToolCallEnd for block %d with no EventToolCallStart",
+				llm.ErrMalformedStream, e.BlockIndex)
+		}
 		args := e.Arguments
 		if len(args) == 0 {
 			args = json.RawMessage("{}")
@@ -1202,6 +1214,7 @@ func (a *messageAccumulator) apply(event llm.StreamEvent) {
 		a.msg.StopReason = e.StopReason
 		a.msg.Usage = e.Usage
 	}
+	return nil
 }
 
 func (a *messageAccumulator) ensureBlock(idx int) {

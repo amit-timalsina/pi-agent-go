@@ -110,7 +110,7 @@ func main() {
 - **Per-iteration context transform.** `Config.TransformContext(ctx, msgs) ([]llm.Message, error)` runs at the top of every iteration to mutate the message slice sent to the LLM — context-window pruning, summarization, or late synthetic-message injection — without touching the durable transcript. Returning an error aborts the run as `ErrTransformContext`.
 - **Dynamic system prompt.** `SetSystemPrompt(s)` / `SystemPrompt()` evolve the system prompt on a long-running agent between turns (e.g. from a hook or `TransformContext`).
 - **Snapshot.** `Snapshot()` returns an immutable view of state for cross-goroutine observation.
-- **Production-friendly errors.** Hook errors abort the run; tool errors flow back to the model as `ToolResultBlock{IsError: true}` (the model can recover).
+- **Production-friendly errors.** Hook errors abort the run; tool errors flow back to the model as `ToolResultBlock{IsError: true}` (the model can recover). A provider that breaks the `Start`→`Delta`→`End` event contract aborts the run with `llm.ErrMalformedStream` rather than panicking the host process — branch on it with `errors.Is`.
 
 ## Hooks
 

@@ -540,3 +540,31 @@ func TestTypedToolUnmarshalsArgs(t *testing.T) {
 		t.Errorf("Typed args not unmarshaled: %+v", captured)
 	}
 }
+
+// Agent.Run must surface the malformed stream as a typed error rather than
+// letting provider event ordering panic the host process.
+func TestRun_MalformedStreamSurfacesTypedError(t *testing.T) {
+	f := &fakeLLM{scripts: [][]llm.StreamEvent{{
+		llm.EventMessageStart{Model: "m"},
+		llm.EventToolCallEnd{BlockIndex: 0, Arguments: json.RawMessage(`{"a":1}`)},
+		llm.EventMessageEnd{StopReason: llm.StopReasonToolUse},
+	}}}
+	a, err := agent.New(agent.Config{LLM: f, Model: "m"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var gotErr error
+	for _, err := range a.Run(context.Background(), "hi") {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("Run completed without error on a malformed stream")
+	}
+	if !errors.Is(gotErr, llm.ErrMalformedStream) {
+		t.Errorf("errors.Is(err, llm.ErrMalformedStream)=false: %v", gotErr)
+	}
+}
