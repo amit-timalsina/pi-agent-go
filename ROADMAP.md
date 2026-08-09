@@ -7,6 +7,12 @@ Reordering happens when reality changes.
 
 ## Status
 
+- **v1.0.2** shipped 2026-08-09 — The private accumulator preserves
+  `TextBlock.Signature` and `ToolCallBlock.Signature` from their terminal
+  events, so Gemini `thoughtSignature` metadata survives to the next
+  iteration's request. Without it the pi-llm-go v1.4.0 capture is undone
+  at the agent layer and Gemini 3 rejects the follow-up call. Ships on
+  `pi-llm-go v1.4.0`.
 - **v1.0.1** shipped 2026-08-04 — `Agent.Run` returns
   `llm.ErrMalformedStream` instead of panicking when a provider emits an
   `EventToolCallEnd` for a block no `EventToolCallStart` opened. Closes
