@@ -89,6 +89,26 @@ func toolCallScript(id, name, args string) []llm.StreamEvent {
 	}
 }
 
+func signedToolCallScript(id, name, args string) []llm.StreamEvent {
+	return []llm.StreamEvent{
+		llm.EventMessageStart{Model: "test"},
+		llm.EventTextStart{BlockIndex: 0},
+		llm.EventTextDelta{BlockIndex: 0, Delta: "checking"},
+		llm.EventTextEnd{BlockIndex: 0, Signature: "text-signature"},
+		llm.EventToolCallStart{BlockIndex: 1, ID: id, Name: name},
+		llm.EventToolCallDelta{BlockIndex: 1, Delta: args},
+		llm.EventToolCallEnd{
+			BlockIndex: 1,
+			Arguments:  json.RawMessage(args),
+			Signature:  "tool-signature",
+		},
+		llm.EventMessageEnd{
+			StopReason: llm.StopReasonToolUse,
+			Usage:      llm.Usage{InputTokens: 8, OutputTokens: 4, TotalTokens: 12},
+		},
+	}
+}
+
 // echoTool returns whatever input.text was passed.
 type echoArgs struct {
 	Text string `json:"text"`
@@ -201,6 +221,68 @@ func TestRunWithToolCall(t *testing.T) {
 	}
 	if tr, ok := last.Content[0].(llm.ToolResultBlock); !ok || tr.Content != "hello world" {
 		t.Errorf("ToolResultBlock content: %+v", last.Content[0])
+	}
+}
+
+func TestRejectedToolPreservesAssistantPartSignaturesInNextRequest(t *testing.T) {
+	fake := &fakeLLM{
+		scripts: [][]llm.StreamEvent{
+			signedToolCallScript("call_signed", "echo", `{"text":"hello"}`),
+			textOnlyScript("done"),
+		},
+	}
+	a, err := agent.New(agent.Config{
+		LLM:   fake,
+		Model: "test",
+		Tools: []agent.AgentTool{echoTool()},
+		BeforeToolCall: func(context.Context, agent.RunContext, agent.ToolCallInfo) (bool, string, error) {
+			return true, "rejected for test", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := collect(t, a.Run(context.Background(), "use the tool")); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(fake.requests) != 2 {
+		t.Fatalf("LLM requests=%d, want 2", len(fake.requests))
+	}
+	messages := fake.requests[1].Messages
+	if len(messages) != 3 {
+		t.Fatalf("iteration-2 messages=%d, want user + assistant + tool result", len(messages))
+	}
+	assistant := messages[1]
+	if assistant.Role != llm.RoleAssistant || len(assistant.Content) != 2 {
+		t.Fatalf("iteration-2 assistant message=%+v", assistant)
+	}
+	text, ok := assistant.Content[0].(llm.TextBlock)
+	if !ok {
+		t.Fatalf("assistant.Content[0]=%T, want TextBlock", assistant.Content[0])
+	}
+	if text.Text != "checking" || text.Signature != "text-signature" {
+		t.Fatalf("signed text block=%+v", text)
+	}
+	call, ok := assistant.Content[1].(llm.ToolCallBlock)
+	if !ok {
+		t.Fatalf("assistant.Content[1]=%T, want ToolCallBlock", assistant.Content[1])
+	}
+	if call.ID != "call_signed" || call.Name != "echo" ||
+		string(call.Arguments) != `{"text":"hello"}` || call.Signature != "tool-signature" {
+		t.Fatalf("signed tool-call block=%+v", call)
+	}
+
+	resultMessage := messages[2]
+	if resultMessage.Role != llm.RoleTool || len(resultMessage.Content) != 1 {
+		t.Fatalf("iteration-2 tool-result message=%+v", resultMessage)
+	}
+	result, ok := resultMessage.Content[0].(llm.ToolResultBlock)
+	if !ok {
+		t.Fatalf("tool-result content=%T, want ToolResultBlock", resultMessage.Content[0])
+	}
+	if result.ToolCallID != "call_signed" || result.Content != "rejected for test" || !result.IsError {
+		t.Fatalf("rejected tool result=%+v", result)
 	}
 }
 

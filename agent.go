@@ -1169,7 +1169,10 @@ func (a *messageAccumulator) apply(event llm.StreamEvent) error {
 		}
 	case llm.EventTextEnd:
 		if b, ok := a.textBuilders[e.BlockIndex]; ok {
-			a.msg.Content[e.BlockIndex] = llm.TextBlock{Text: b.String()}
+			a.msg.Content[e.BlockIndex] = llm.TextBlock{
+				Text:      b.String(),
+				Signature: e.Signature,
+			}
 		}
 	case llm.EventThinkingStart:
 		a.ensureBlock(e.BlockIndex)
@@ -1209,6 +1212,7 @@ func (a *messageAccumulator) apply(event llm.StreamEvent) error {
 			ID:        meta.id,
 			Name:      meta.name,
 			Arguments: args,
+			Signature: e.Signature,
 		}
 	case llm.EventMessageEnd:
 		a.msg.StopReason = e.StopReason

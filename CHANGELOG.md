@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Signed assistant parts now survive agent iterations.** The private
+  streaming accumulator previously rebuilt `TextBlock` and `ToolCallBlock`
+  values without the opaque `Signature` carried by their terminal events.
+  Gemini tool loops therefore lost `thoughtSignature` metadata before the
+  assistant message reached the next request. Both fields are now preserved,
+  including when `BeforeToolCall` rejects a call and the model receives an
+  error tool result for repair. Depends on the additive signature API from
+  [pi-llm-go#47].
+
+[pi-llm-go#47]: https://github.com/amit-timalsina/pi-llm-go/pull/47
+
 ## [1.0.1] - 2026-08-04
 
 ### Fixed
