@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-09
+
 ### Fixed
 
 - **Signed assistant parts now survive agent iterations.** The private
@@ -14,8 +16,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Gemini tool loops therefore lost `thoughtSignature` metadata before the
   assistant message reached the next request. Both fields are now preserved,
   including when `BeforeToolCall` rejects a call and the model receives an
-  error tool result for repair. Depends on the additive signature API from
-  [pi-llm-go#47].
+  error tool result for repair.
+
+### Changed
+
+- Bump `github.com/amit-timalsina/pi-llm-go` `v1.3.0` → `v1.4.0` for the
+  additive `TextBlock.Signature` / `ToolCallBlock.Signature` API and the
+  Gemini `thoughtSignature` capture that populates them ([pi-llm-go#47]).
 
 [pi-llm-go#47]: https://github.com/amit-timalsina/pi-llm-go/pull/47
 
@@ -550,7 +557,8 @@ four end-to-end demos (hello_agent, with_hooks, steering, multi_tool).
 - `github.com/invopop/jsonschema v0.14.0` for `Typed[I, O]` schema derivation.
 - `github.com/amit-timalsina/pi-llm-go` (sibling package).
 
-[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/amit-timalsina/pi-agent-go/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/amit-timalsina/pi-agent-go/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/amit-timalsina/pi-agent-go/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/amit-timalsina/pi-agent-go/compare/v0.7.2...v0.8.0

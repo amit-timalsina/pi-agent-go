@@ -3,7 +3,7 @@ module github.com/amit-timalsina/pi-agent-go
 go 1.25.0
 
 require (
-	github.com/amit-timalsina/pi-llm-go v1.3.1-0.20260809170803-e515c68ed7f9
+	github.com/amit-timalsina/pi-llm-go v1.4.0
 	github.com/invopop/jsonschema v0.14.0
 	golang.org/x/sync v0.22.0
 )
